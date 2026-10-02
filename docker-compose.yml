@@ -1,0 +1,61 @@
+version: "2.4"
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:?Set MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER:?Set MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL to the Compose MySQL service}
+      SHADOW_DATABASE_URL: ${SHADOW_DATABASE_URL:?Set SHADOW_DATABASE_URL to the Compose MySQL service}
+      JWT_SECRET: ${JWT_SECRET:?Set a strong JWT_SECRET}
+      JWT_EXPIRATION: 24h
+      API_PORT: 3001
+      NODE_ENV: ${NODE_ENV:-development}
+      PAYMENT_MODE: ${PAYMENT_MODE:-sandbox}
+      FRONTEND_URL: ${FRONTEND_URL:?Set FRONTEND_URL}
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+      RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-}
+      RAZORPAY_USD_TO_INR: ${RAZORPAY_USD_TO_INR:-}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      PAYPAL_CLIENT_ID: ${PAYPAL_CLIENT_ID:-}
+      PAYPAL_CLIENT_SECRET: ${PAYPAL_CLIENT_SECRET:-}
+      PAYPAL_WEBHOOK_ID: ${PAYPAL_WEBHOOK_ID:-}
+    volumes:
+      - ./backend/storage:/app/storage
+    ports:
+      - "3001:3001"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?Set NEXT_PUBLIC_API_URL}
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+
+volumes:
+  mysql_data:

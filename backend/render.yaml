@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: conference-api
+    runtime: node
+    buildCommand: npm ci && npm run build
+    startCommand: sh -c "npx prisma migrate deploy && npm start"
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: API_PORT
+        value: "3001"
+      - key: DATABASE_URL
+        fromDatabase: CONFERENCE_DB
+      - key: SHADOW_DATABASE_URL
+        value: ''
+      - key: JWT_SECRET
+        value: ''
+      - key: NEXT_PUBLIC_API_URL
+        value: ''
+    autoDeploy: true
+    region: oregon
+    plan: free
+
