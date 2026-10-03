@@ -136,7 +136,18 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    if (production) {
+    if (production && provider === 'razorpay') {
+      if (!process.env.RAZORPAY_WEBHOOK_SECRET) {
+        throw new ServiceUnavailableException('razorpay webhook verification is not configured');
+      }
+      if (!Number.isFinite(Number(process.env.RAZORPAY_USD_TO_INR)) || Number(process.env.RAZORPAY_USD_TO_INR) <= 0) {
+        throw new ServiceUnavailableException('A positive Razorpay USD-to-INR rate is required in production');
+      }
+      const frontendUrls = String(process.env.FRONTEND_URL || '').split(',').map((url) => url.trim());
+      if (!frontendUrls.length || frontendUrls.some((url) => !url.startsWith('https://'))) {
+        throw new ServiceUnavailableException('Production frontend URLs must use HTTPS');
+      }
+    } else if (production) {
       if (process.env.PAYMENT_MODE !== 'production') {
         throw new ServiceUnavailableException('Live payment mode must be explicitly enabled in production');
       }
@@ -148,12 +159,6 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
       if (!webhookReady) throw new ServiceUnavailableException(`${provider} webhook verification is not configured`);
       if (provider === 'stripe' && !process.env.STRIPE_SECRET_KEY?.startsWith('sk_live_')) {
         throw new ServiceUnavailableException('Stripe live credentials are required in production');
-      }
-      if (provider === 'razorpay' && !process.env.RAZORPAY_KEY_ID?.startsWith('rzp_live_')) {
-        throw new ServiceUnavailableException('Razorpay live credentials are required in production');
-      }
-      if (provider === 'razorpay' && (!Number.isFinite(Number(process.env.RAZORPAY_USD_TO_INR)) || Number(process.env.RAZORPAY_USD_TO_INR) <= 0)) {
-        throw new ServiceUnavailableException('A positive Razorpay USD-to-INR rate is required in production');
       }
       const frontendUrls = String(process.env.FRONTEND_URL || '').split(',').map((url) => url.trim());
       if (!frontendUrls.length || frontendUrls.some((url) => !url.startsWith('https://'))) {
