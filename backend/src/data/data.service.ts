@@ -968,12 +968,13 @@ export class DataService {
 
   async getPaymentProviderStatus() {
     const production = String(process.env.NODE_ENV).toLowerCase() === 'production';
-    const liveModeReady = !production || process.env.PAYMENT_MODE === 'production';
+    const paymentMode = String(process.env.PAYMENT_MODE || 'sandbox').toLowerCase();
+    const liveModeReady = !production || paymentMode === 'production';
     const httpsReady = !production || String(process.env.FRONTEND_URL || '').split(',').every((url) => url.trim().startsWith('https://'));
     const razorpayRateReady = !production || (Number.isFinite(Number(process.env.RAZORPAY_USD_TO_INR)) && Number(process.env.RAZORPAY_USD_TO_INR) > 0);
     const razorpayKeyId = String(process.env.RAZORPAY_KEY_ID || '');
-    const razorpayKeyModeReady = (razorpayKeyId.startsWith('rzp_live_') && production && process.env.PAYMENT_MODE === 'production') ||
-      (razorpayKeyId.startsWith('rzp_test_') && process.env.PAYMENT_MODE !== 'production');
+    const razorpayKeyModeReady = (razorpayKeyId.startsWith('rzp_live_') && production && paymentMode === 'production') ||
+      (razorpayKeyId.startsWith('rzp_test_') && paymentMode === 'sandbox');
     return {
       stripe: {
         configured: Boolean(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_WEBHOOK_SECRET && liveModeReady && httpsReady && (!production || process.env.STRIPE_SECRET_KEY.startsWith('sk_live_'))),
@@ -984,8 +985,8 @@ export class DataService {
         mode: process.env.PAYMENT_MODE || 'sandbox',
       },
       razorpay: {
-        configured: Boolean(razorpayKeyModeReady && process.env.RAZORPAY_KEY_SECRET && process.env.RAZORPAY_WEBHOOK_SECRET && liveModeReady && httpsReady && razorpayRateReady),
-        mode: process.env.PAYMENT_MODE || 'sandbox',
+        configured: Boolean(razorpayKeyModeReady && process.env.RAZORPAY_KEY_SECRET && process.env.RAZORPAY_WEBHOOK_SECRET && httpsReady && razorpayRateReady),
+        mode: paymentMode,
       },
       phonepe: {
         configured: false,
