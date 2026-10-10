@@ -71,6 +71,8 @@ For Docker Compose, provide `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, `M
 
 **Free tier**: 100 emails/day
 
+Abstract submission acknowledgments, brochure-request delivery, and paid-registration confirmations are queued in the database and retried automatically if Resend is unavailable. Paid-registration emails include a PDF receipt attachment and a secure receipt download link. Configure `RESEND_API_KEY` and a verified `EMAIL_FROM` sender after deploying migrations.
+
 ### 1.4 Hostinger Domain Setup
 
 1. If you don't have a domain, purchase from [hostinger.com](https://hostinger.com)

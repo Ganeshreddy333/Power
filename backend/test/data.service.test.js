@@ -285,6 +285,10 @@ describe('DataService raw-query behavior', () => {
   it('emails the exact order gateway currency and amount', async () => {
     const emailService = { send: jest.fn().mockResolvedValue({}) };
     const service = new DataService({}, emailService, undefined);
+    jest.spyOn(service, 'generateReceipt').mockResolvedValue({
+      receiptNumber: 'REC-1',
+      pdfBase64: 'cGRm',
+    });
     jest.spyOn(service, 'list').mockImplementation(async (table) => {
       if (table === 'registration_intents') return [{
         id: 'registration-a',
@@ -294,8 +298,15 @@ describe('DataService raw-query behavior', () => {
         amount_usd: 156.45,
         gateway_response: { orderId: 'order-a' },
       }];
-      if (table === 'orders') return [{ id: 'order-a', registration_id: 'registration-a', order_number: 'ORD-1', gateway_amount: 1341000, gateway_currency: 'INR' }];
-      if (table === 'payments') return [{ provider_payment_id: 'pay-a' }];
+      if (table === 'orders') return [{
+        id: 'order-a',
+        registration_id: 'registration-a',
+        order_number: 'ORD-1',
+        access_token: 'access-token-a',
+        gateway_amount: 1341000,
+        gateway_currency: 'INR',
+      }];
+      if (table === 'payments') return [{ provider_payment_id: 'pay-a', status: 'SUCCESS' }];
       return [];
     });
 
@@ -303,7 +314,107 @@ describe('DataService raw-query behavior', () => {
 
     expect(emailService.send.mock.calls[0][0].html).toContain('INR 13410.00');
     expect(emailService.send.mock.calls[0][0].html).toContain('pay-a');
+    expect(emailService.send.mock.calls[0][0].html).toContain('payment=success&amp;order=access-token-a');
+    expect(emailService.send.mock.calls[0][0].attachments).toEqual([
+      { filename: 'receipt-REC-1.pdf', content: 'cGRm' },
+    ]);
     expect(emailService.send.mock.calls[0][0].html).not.toContain('$156.45');
+  });
+
+  it('queues an abstract submission acknowledgment after saving the submission', async () => {
+    const service = new DataService({}, {}, undefined);
+    jest.spyOn(service, 'insert').mockResolvedValue({ id: 'submission-1' });
+    const enqueue = jest.spyOn(service, 'enqueueEmailNotification').mockResolvedValue({ success: true });
+
+    await expect(service.createPublicAbstractSubmission({
+      full_name: 'Ada Lovelace',
+      email: 'ADA@EXAMPLE.TEST',
+      abstract_title: 'Clean Energy Storage',
+    })).resolves.toEqual({ id: 'submission-1' });
+
+    expect(enqueue).toHaveBeenCalledWith(
+      'ABSTRACT_SUBMISSION',
+      'ABSTRACT_SUBMISSION:submission-1',
+      'ada@example.test',
+      { firstName: 'Ada', abstractTitle: 'Clean Energy Storage', submissionId: 'submission-1' },
+    );
+  });
+
+  it('queues a brochure delivery email for brochure download requests only', async () => {
+    const previousFrontendUrl = process.env.FRONTEND_URL;
+    process.env.FRONTEND_URL = 'https://conference.example.test';
+    const service = new DataService({}, {}, undefined);
+    jest.spyOn(service, 'insert').mockResolvedValue({ id: 'contact-1' });
+    const enqueue = jest.spyOn(service, 'enqueueEmailNotification').mockResolvedValue({ success: true });
+
+    try {
+      await service.createPublicContactMessage({
+        name: 'Grace Hopper',
+        email: 'grace@example.test',
+        subject: 'Brochure download request',
+        message: 'Please send me the brochure.',
+      });
+    } finally {
+      if (previousFrontendUrl === undefined) delete process.env.FRONTEND_URL;
+      else process.env.FRONTEND_URL = previousFrontendUrl;
+    }
+
+    expect(enqueue).toHaveBeenCalledWith(
+      'BROCHURE_REQUEST',
+      'BROCHURE_REQUEST:contact-1',
+      'grace@example.test',
+      { firstName: 'Grace', brochureUrl: 'https://conference.example.test/brochure-2027.pdf' },
+    );
+  });
+
+  it('records email provider failures for retry instead of reporting a successful delivery', async () => {
+    const prisma = {
+      $executeRawUnsafe: jest.fn().mockResolvedValue(1),
+      $queryRawUnsafe: jest.fn().mockResolvedValue([{
+        id: 'email-1',
+        type: 'ABSTRACT_SUBMISSION',
+        recipient: 'ada@example.test',
+        payload: JSON.stringify({ firstName: 'Ada', abstractTitle: 'Storage', submissionId: 'submission-1' }),
+      }]),
+    };
+    const emailService = { sendAbstractSubmissionConfirmation: jest.fn().mockRejectedValue(new Error('Resend unavailable')) };
+    const service = new DataService(prisma, emailService, undefined);
+
+    await expect(service.deliverEmailNotification('ABSTRACT_SUBMISSION:submission-1'))
+      .resolves.toEqual({ success: false, retryable: true });
+
+    expect(prisma.$executeRawUnsafe.mock.calls[0][0]).toContain("status` = 'SENDING'");
+    expect(prisma.$executeRawUnsafe.mock.calls[1][0]).toContain("status` = 'FAILED'");
+    expect(prisma.$executeRawUnsafe.mock.calls[1][1]).toBe('Resend unavailable');
+  });
+
+  it('sends a queued abstract confirmation and marks its outbox row sent', async () => {
+    const prisma = {
+      $executeRawUnsafe: jest.fn().mockResolvedValue(1),
+      $queryRawUnsafe: jest.fn().mockResolvedValue([{
+        id: 'email-1',
+        type: 'ABSTRACT_SUBMISSION',
+        recipient: 'ada@example.test',
+        payload: JSON.stringify({
+          firstName: 'Ada',
+          abstractTitle: 'Clean Energy Storage',
+          submissionId: 'submission-1',
+        }),
+      }]),
+    };
+    const emailService = { sendAbstractSubmissionConfirmation: jest.fn().mockResolvedValue({ id: 'resend-1' }) };
+    const service = new DataService(prisma, emailService, undefined);
+
+    await expect(service.deliverEmailNotification('ABSTRACT_SUBMISSION:submission-1'))
+      .resolves.toEqual({ success: true, sent: true });
+
+    expect(emailService.sendAbstractSubmissionConfirmation).toHaveBeenCalledWith(
+      'ada@example.test',
+      'Ada',
+      'Clean Energy Storage',
+      'submission-1',
+    );
+    expect(prisma.$executeRawUnsafe.mock.calls[1][0]).toContain("status` = 'SENT'");
   });
 
   it('requires an exact paid order for receipt generation instead of picking the latest order', async () => {

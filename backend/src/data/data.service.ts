@@ -1,8 +1,8 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { randomUUID, createHmac, timingSafeEqual } from 'crypto';
 import PDFDocument from 'pdfkit';
 import { PrismaService } from '../database/prisma.service';
-import { EmailService } from '../email/email.service';
+import { EmailService, escapeHtml } from '../email/email.service';
 import { CloudinaryService } from '../storage/cloudinary.service';
 
 type Sort = { column: string; ascending?: boolean };
@@ -99,6 +99,8 @@ const DEFAULT_PRICES: Record<string, Record<string, number>> = {
 
 @Injectable()
 export class DataService {
+  private readonly logger = new Logger(DataService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly emailService: EmailService,
@@ -446,7 +448,16 @@ export class DataService {
     const email = String(payload.email || '').trim().toLowerCase();
     const message = String(payload.message || '').trim();
     if (!name || !/^\S+@\S+\.\S+$/.test(email) || !message) throw new BadRequestException('Name, email, and message are required');
-    return this.insert('contact_messages', { name, email, subject: String(payload.subject || '').trim().slice(0, 255), message: message.slice(0, 10000), status: 'new' });
+    const subject = String(payload.subject || '').trim().slice(0, 255);
+    const created = await this.insert('contact_messages', { name, email, subject, message: message.slice(0, 10000), status: 'new' }) as Record<string, unknown>;
+    if (subject.toLowerCase() === 'brochure download request') {
+      const frontendUrl = String(process.env.FRONTEND_URL || 'http://localhost:3000').split(',')[0].trim().replace(/\/$/, '');
+      await this.enqueueEmailNotification('BROCHURE_REQUEST', `BROCHURE_REQUEST:${String(created.id)}`, email, {
+        firstName: name.split(/\s+/)[0],
+        brochureUrl: `${frontendUrl}/brochure-2027.pdf`,
+      });
+    }
+    return created;
   }
 
   async createPublicAbstractSubmission(payload: Record<string, unknown>) {
@@ -456,7 +467,100 @@ export class DataService {
     if (!fullName || !/^\S+@\S+\.\S+$/.test(email) || !title) throw new BadRequestException('Name, email, and abstract title are required');
     const allowed = TABLES.abstract_submissions.writable;
     const cleaned = Object.fromEntries(Object.entries(payload).filter(([key]) => allowed.includes(key)));
-    return this.insert('abstract_submissions', { ...cleaned, full_name: fullName, email, abstract_title: title, status: 'pending' });
+    const created = await this.insert('abstract_submissions', {
+      ...cleaned,
+      full_name: fullName,
+      email,
+      abstract_title: title,
+      status: 'pending',
+    }) as Record<string, unknown>;
+    await this.enqueueEmailNotification('ABSTRACT_SUBMISSION', `ABSTRACT_SUBMISSION:${String(created.id)}`, email, {
+      firstName: fullName.split(/\s+/)[0],
+      abstractTitle: title,
+      submissionId: String(created.id),
+    });
+    return created;
+  }
+
+  private async enqueueEmailNotification(type: 'ABSTRACT_SUBMISSION' | 'BROCHURE_REQUEST', dedupeKey: string, recipient: string, payload: Record<string, unknown>) {
+    await (this.prisma as any).$executeRawUnsafe(
+      `INSERT INTO \`email_notifications\` (\`id\`, \`dedupe_key\`, \`type\`, \`recipient\`, \`payload\`, \`status\`, \`attempts\`, \`next_attempt_at\`)
+       VALUES (?, ?, ?, ?, ?, 'PENDING', 0, NOW(3))
+       ON DUPLICATE KEY UPDATE \`dedupe_key\` = VALUES(\`dedupe_key\`)`,
+      randomUUID(),
+      dedupeKey,
+      type,
+      recipient,
+      JSON.stringify(payload),
+    );
+    return this.deliverEmailNotification(dedupeKey);
+  }
+
+  private async deliverEmailNotification(dedupeKey: string) {
+    const claimed = await (this.prisma as any).$executeRawUnsafe(
+      `UPDATE \`email_notifications\` SET \`status\` = 'SENDING', \`attempts\` = \`attempts\` + 1, \`updated_at\` = NOW(3)
+       WHERE \`dedupe_key\` = ? AND \`status\` IN ('PENDING', 'FAILED') AND \`next_attempt_at\` <= NOW(3)`,
+      dedupeKey,
+    );
+    if (Number(claimed) !== 1) return { skipped: true };
+
+    const rows = await (this.prisma as any).$queryRawUnsafe(
+      'SELECT `id`, `type`, `recipient`, `payload` FROM `email_notifications` WHERE `dedupe_key` = ? AND `status` = ? LIMIT 1',
+      dedupeKey,
+      'SENDING',
+    ) as Array<Record<string, unknown>>;
+    const notification = rows[0];
+    if (!notification) throw new ServiceUnavailableException('Claimed email notification could not be loaded');
+
+    try {
+      const payload = typeof notification.payload === 'string'
+        ? JSON.parse(notification.payload) as Record<string, unknown>
+        : notification.payload as Record<string, unknown>;
+      if (notification.type === 'ABSTRACT_SUBMISSION') {
+        await this.emailService.sendAbstractSubmissionConfirmation(
+          String(notification.recipient),
+          String(payload.firstName ?? ''),
+          String(payload.abstractTitle ?? ''),
+          String(payload.submissionId ?? ''),
+        );
+      } else if (notification.type === 'BROCHURE_REQUEST') {
+        await this.emailService.sendBrochureRequestConfirmation(
+          String(notification.recipient),
+          String(payload.firstName ?? ''),
+          String(payload.brochureUrl ?? ''),
+        );
+      } else {
+        throw new BadRequestException(`Unsupported email notification type: ${String(notification.type)}`);
+      }
+      await (this.prisma as any).$executeRawUnsafe(
+        "UPDATE `email_notifications` SET `status` = 'SENT', `sent_at` = NOW(3), `last_error` = NULL, `updated_at` = NOW(3) WHERE `id` = ? AND `status` = 'SENDING'",
+        notification.id,
+      );
+      return { success: true, sent: true };
+    } catch (error) {
+      const message = (error instanceof Error ? error.message : String(error)).slice(0, 2000);
+      await (this.prisma as any).$executeRawUnsafe(
+        "UPDATE `email_notifications` SET `status` = 'FAILED', `last_error` = ?, `next_attempt_at` = DATE_ADD(NOW(3), INTERVAL LEAST(POW(2, `attempts`), 60) MINUTE), `updated_at` = NOW(3) WHERE `id` = ? AND `status` = 'SENDING'",
+        message,
+        notification.id,
+      );
+      this.logger.warn(`Email notification delivery failed for ${dedupeKey}: ${message}`);
+      return { success: false, retryable: true };
+    }
+  }
+
+  async retryFailedEmailNotifications(limit = 50) {
+    const batchSize = Math.min(Math.max(Math.floor(limit), 1), 100);
+    await (this.prisma as any).$executeRawUnsafe(
+      "UPDATE `email_notifications` SET `status` = 'FAILED' WHERE `status` = 'SENDING' AND `updated_at` < DATE_SUB(NOW(3), INTERVAL 10 MINUTE)",
+    );
+    const rows = await (this.prisma as any).$queryRawUnsafe(
+      "SELECT `dedupe_key` FROM `email_notifications` WHERE `status` IN ('PENDING', 'FAILED') AND `next_attempt_at` <= NOW(3) ORDER BY `next_attempt_at` ASC LIMIT ?",
+      batchSize,
+    ) as Array<{ dedupe_key: string }>;
+    const results = [];
+    for (const row of rows) results.push(await this.deliverEmailNotification(row.dedupe_key));
+    return results;
   }
 
   async upsert(table: string, payload: Record<string, unknown> | Record<string, unknown>[], onConflict?: string) {
@@ -1140,17 +1244,25 @@ export class DataService {
       ? (Number(order.gateway_amount) / 100).toFixed(2)
       : Number(row.amount_usd ?? row.amount ?? 0).toFixed(2);
     const provider = String(row.payment_provider ?? 'gateway');
+    const receipt = order && payment?.provider_payment_id
+      ? await this.generateReceipt({ registrationId, orderId: order.id })
+      : null;
+    const frontendUrl = String(process.env.FRONTEND_URL || 'http://localhost:3000').split(',')[0].trim().replace(/\/$/, '');
+    const receiptUrl = order?.access_token
+      ? `${frontendUrl}/?payment=success&order=${encodeURIComponent(String(order.access_token))}`
+      : null;
 
     const html = `
       <h1>Registration confirmed</h1>
       <p>Thank you for registering. Your payment has been successfully received.</p>
-      <p><strong>Registration ID:</strong> ${row.id ?? registrationId}</p>
-      <p><strong>Acknowledgement Number:</strong> ${acknowledgementNumber}</p>
-      <p><strong>Receipt Number:</strong> ${receiptNumber}</p>
-      <p><strong>Payment Provider:</strong> ${provider}</p>
-      <p><strong>Amount:</strong> ${currency} ${amount}</p>
-      ${order?.order_number ? `<p><strong>Order Number:</strong> ${order.order_number}</p>` : ''}
-      ${payment?.provider_payment_id ? `<p><strong>Payment ID:</strong> ${payment.provider_payment_id}</p>` : ''}
+      <p><strong>Registration ID:</strong> ${escapeHtml(row.id ?? registrationId)}</p>
+      <p><strong>Acknowledgement Number:</strong> ${escapeHtml(acknowledgementNumber)}</p>
+      <p><strong>Receipt Number:</strong> ${escapeHtml(receiptNumber)}</p>
+      <p><strong>Payment Provider:</strong> ${escapeHtml(provider)}</p>
+      <p><strong>Amount:</strong> ${escapeHtml(currency)} ${escapeHtml(amount)}</p>
+      ${order?.order_number ? `<p><strong>Order Number:</strong> ${escapeHtml(order.order_number)}</p>` : ''}
+      ${payment?.provider_payment_id ? `<p><strong>Payment ID:</strong> ${escapeHtml(payment.provider_payment_id)}</p>` : ''}
+      ${receiptUrl ? `<p><a href="${escapeHtml(receiptUrl)}">View and download your payment receipt</a></p>` : ''}
       <p>You can present this acknowledgement number during check-in.</p>
     `;
 
@@ -1158,6 +1270,12 @@ export class DataService {
       to: String(row.email),
       subject: 'Conference Registration Payment Confirmed',
       html,
+      ...(receipt ? {
+        attachments: [{
+          filename: `receipt-${receipt.receiptNumber}.pdf`,
+          content: receipt.pdfBase64,
+        }],
+      } : {}),
     });
 
     return {

@@ -252,6 +252,24 @@ model PaymentNotification {
   @@map("payment_notifications")
 }
 
+model EmailNotification {
+  id            String    @id @default(cuid())
+  dedupeKey     String    @unique @map("dedupe_key")
+  type          String    @db.VarChar(64)
+  recipient     String    @db.VarChar(320)
+  payload       String    @db.LongText
+  status        String    @default("PENDING") @db.VarChar(32)
+  attempts      Int       @default(0)
+  lastError     String?   @map("last_error") @db.Text
+  nextAttemptAt DateTime  @default(now()) @map("next_attempt_at")
+  sentAt        DateTime? @map("sent_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@index([status, nextAttemptAt])
+  @@map("email_notifications")
+}
+
 // Coupon codes
 model Coupon {
   id        String   @id @default(cuid())

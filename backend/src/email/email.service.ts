@@ -7,7 +7,16 @@ export interface EmailOptions {
   subject: string;
   html: string;
   replyTo?: string;
+  attachments?: Array<{ filename: string; content: string }>;
 }
+
+export const escapeHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (character) => ({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+})[character]!);
 
 @Injectable()
 export class EmailService {
@@ -25,13 +34,13 @@ export class EmailService {
         to: options.to,
         subject: options.subject,
         html: options.html,
+        ...(options.attachments?.length ? { attachments: options.attachments } : {}),
       };
 
       if (options.replyTo) payload.reply_to = options.replyTo;
 
       if (!this.resend) {
-        console.log('Email service disabled: RESEND_API_KEY not configured.');
-        return { success: true, skipped: true, message: 'Email service disabled in local development.' };
+        throw new Error('Email delivery is unavailable: RESEND_API_KEY is not configured');
       }
 
       const result = await this.resend.emails.send(payload);
@@ -52,14 +61,16 @@ export class EmailService {
     firstName: string,
     confirmationLink: string,
   ): Promise<any> {
+    const safeFirstName = escapeHtml(firstName);
+    const safeConfirmationLink = escapeHtml(confirmationLink);
     return this.send({
       to: email,
       subject: 'Confirm Your Conference Registration',
       html: `
-        <h1>Welcome, ${firstName}!</h1>
+        <h1>Welcome, ${safeFirstName}!</h1>
         <p>Thank you for registering for our conference.</p>
         <p>
-          <a href="${confirmationLink}" style="background-color: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">
+          <a href="${safeConfirmationLink}" style="background-color: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">
             Confirm Your Registration
           </a>
         </p>
@@ -74,15 +85,32 @@ export class EmailService {
     abstractTitle: string,
     submissionId: string,
   ): Promise<any> {
+    const safeFirstName = escapeHtml(firstName);
+    const safeTitle = escapeHtml(abstractTitle);
+    const safeSubmissionId = escapeHtml(submissionId);
     return this.send({
       to: email,
       subject: 'Abstract Submission Received',
       html: `
-        <h1>Thank You, ${firstName}!</h1>
+        <h1>Thank You, ${safeFirstName}!</h1>
         <p>We have received your abstract submission:</p>
-        <p><strong>Title:</strong> ${abstractTitle}</p>
-        <p><strong>Submission ID:</strong> ${submissionId}</p>
+        <p><strong>Title:</strong> ${safeTitle}</p>
+        <p><strong>Submission ID:</strong> ${safeSubmissionId}</p>
         <p>You will be notified about the status of your submission shortly.</p>
+      `,
+    });
+  }
+
+  async sendBrochureRequestConfirmation(email: string, firstName: string, brochureUrl: string): Promise<any> {
+    const safeFirstName = escapeHtml(firstName);
+    const safeBrochureUrl = escapeHtml(brochureUrl);
+    return this.send({
+      to: email,
+      subject: 'Your Conference Brochure',
+      html: `
+        <h1>Hello, ${safeFirstName}!</h1>
+        <p>Thank you for your interest in the conference. You can download the brochure using the link below.</p>
+        <p><a href="${safeBrochureUrl}">Download the conference brochure</a></p>
       `,
     });
   }
@@ -92,15 +120,17 @@ export class EmailService {
     firstName: string,
     resetLink: string,
   ): Promise<any> {
+    const safeFirstName = escapeHtml(firstName);
+    const safeResetLink = escapeHtml(resetLink);
     return this.send({
       to: email,
       subject: 'Reset Your Password',
       html: `
         <h1>Password Reset Request</h1>
-        <p>Hi ${firstName},</p>
+        <p>Hi ${safeFirstName},</p>
         <p>We received a request to reset your password. Click the link below to proceed:</p>
         <p>
-          <a href="${resetLink}" style="background-color: #dc3545; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">
+          <a href="${safeResetLink}" style="background-color: #dc3545; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">
             Reset Password
           </a>
         </p>

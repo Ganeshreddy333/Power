@@ -49,6 +49,9 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
       this.data.retryFailedPaymentNotifications().catch((error) =>
         this.logger.warn(`payment notification retry failed: ${this.errorMessage(error)}`),
       );
+      this.data.retryFailedEmailNotifications().catch((error) =>
+        this.logger.warn(`email notification retry failed: ${this.errorMessage(error)}`),
+      );
     }, SWEEP_INTERVAL_MS);
     this.notificationTimer.unref?.();
   }
