@@ -342,7 +342,44 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
 
   // Gateway amounts are USD minor units (cents) for every supported provider.
   private toGatewayAmount(provider: PaymentProvider, amountUsd: number) {
-    return { amount: Math.round(amountUsd * 100), currency: 'USD' };
+    const match = /^(\d+)(?:\.(\d{1,2}))?$/.exec(String(amountUsd));
+    if (!Number.isFinite(amountUsd) || amountUsd <= 0 || !match) {
+      throw new BadRequestException('Order amount must be a valid USD amount');
+    }
+    const minorUnits = BigInt(match[1]) * 100n + BigInt((match[2] || '').padEnd(2, '0') || '0');
+    if (minorUnits > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new BadRequestException('Order amount must be a valid USD amount');
+    }
+    return { amount: Number(minorUnits), currency: 'USD' };
+  }
+
+  private toMinorUnits(value: unknown): bigint | null {
+    if (typeof value === 'bigint') return value >= 0n ? value : null;
+    if (typeof value === 'number') {
+      return Number.isSafeInteger(value) && value >= 0 ? BigInt(value) : null;
+    }
+    if (typeof value === 'string' && /^\d+$/.test(value)) return BigInt(value);
+    return null;
+  }
+
+  private paypalAmountToMinorUnits(value: unknown): number | null {
+    const amount = String(value ?? '');
+    const match = /^(\d+)(?:\.(\d{1,2}))?$/.exec(amount);
+    if (!match) return null;
+    const minorUnits = BigInt(match[1]) * 100n + BigInt((match[2] || '').padEnd(2, '0') || '0');
+    return minorUnits <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(minorUnits) : null;
+  }
+
+  private formatMinorUnits(value: unknown): string | null {
+    const minorUnits = this.toMinorUnits(value);
+    if (minorUnits === null) return null;
+    return `${minorUnits / 100n}.${String(minorUnits % 100n).padStart(2, '0')}`;
+  }
+
+  private payPalApiBaseUrl() {
+    return String(process.env.PAYMENT_MODE || '').trim().toLowerCase() === 'production'
+      ? 'https://api-m.paypal.com'
+      : 'https://api-m.sandbox.paypal.com';
   }
 
   private generateOrderNumber() {
@@ -418,13 +455,20 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
 
   private async attachPayPalOrder(order: Record<string, any>, reg: Record<string, any>) {
     const frontendUrl = this.frontendUrl();
+    const expectedCurrency = String(order.gateway_currency || '').toUpperCase();
+    const expectedMinorUnits = this.toMinorUnits(order.gateway_amount);
+    const expectedAmount = this.formatMinorUnits(order.gateway_amount);
+    if (expectedCurrency !== 'USD' || expectedMinorUnits === null || expectedMinorUnits <= 0n || !expectedAmount) {
+      throw new BadRequestException('Stored PayPal order amount or currency is invalid');
+    }
+    const requestedAmount = { currency_code: expectedCurrency, value: expectedAmount };
     const paypalOrder = await this.payPalRequest('/v2/checkout/orders', 'POST', {
       intent: 'CAPTURE',
       purchase_units: [{
         reference_id: order.id,
         custom_id: order.id,
         description: String(reg.plan_name || 'Conference registration'),
-        amount: { currency_code: 'USD', value: (Number(order.gateway_amount) / 100).toFixed(2) },
+        amount: requestedAmount,
       }],
       application_context: {
         return_url: `${frontendUrl}/registration/success?provider=paypal&order=${encodeURIComponent(order.access_token)}`,
@@ -434,9 +478,24 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     });
     const purchaseUnit = (paypalOrder.purchase_units as Record<string, any>[] | undefined)?.[0];
     const paypalAmount = purchaseUnit?.amount as Record<string, any> | undefined;
-    if (!paypalAmount ||
-        String(paypalAmount.currency_code).toUpperCase() !== 'USD' ||
-        Math.round(Number(paypalAmount.value) * 100) !== Number(order.gateway_amount)) {
+    const returnedMinorUnits = this.paypalAmountToMinorUnits(paypalAmount?.value);
+    const returnedCurrency = String(paypalAmount?.currency_code || '').toUpperCase();
+    if (!paypalOrder.id || !Array.isArray(paypalOrder.purchase_units) ||
+        paypalOrder.purchase_units.length !== 1 || !paypalAmount ||
+        returnedCurrency !== expectedCurrency ||
+        returnedMinorUnits === null ||
+        this.toMinorUnits(returnedMinorUnits) !== expectedMinorUnits) {
+      this.log('PAYPAL_ORDER_RESPONSE_MISMATCH', {
+        orderId: order.id,
+        providerOrderId: paypalOrder.id,
+        apiEnvironment: String(process.env.PAYMENT_MODE || 'sandbox').trim().toLowerCase() === 'production' ? 'production' : 'sandbox',
+        expectedAmount,
+        expectedCurrency,
+        requestedAmount: requestedAmount.value,
+        requestedCurrency: requestedAmount.currency_code,
+        returnedAmount: paypalAmount?.value == null ? null : String(paypalAmount.value).slice(0, 32),
+        returnedCurrency: returnedCurrency || null,
+      });
       throw new BadRequestException('PayPal created an order with an unexpected amount or currency');
     }
     const approvalUrl = (paypalOrder.links as any[])?.find((link) => link.rel === 'approve')?.href;
@@ -479,8 +538,9 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
       return { status: 'PENDING', orderNumber: order.order_number };
     }
 
-    const capturedMinorUnits = Math.round(Number(capture?.amount?.value) * 100);
-    if (!Number.isFinite(capturedMinorUnits) || capturedMinorUnits !== Number(order.gateway_amount) ||
+    const capturedMinorUnits = this.paypalAmountToMinorUnits(capture?.amount?.value);
+    if (capturedMinorUnits === null ||
+        this.toMinorUnits(capturedMinorUnits) !== this.toMinorUnits(order.gateway_amount) ||
         String(capture?.amount?.currency_code).toUpperCase() !== String(order.gateway_currency).toUpperCase()) {
       throw new BadRequestException('PayPal capture amount or currency does not match the order');
     }
@@ -499,7 +559,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
   private async payPalRequest(path: string, method: 'POST' | 'GET', body?: Record<string, unknown>, requestId?: string) {
     const clientId = process.env.PAYPAL_CLIENT_ID!;
     const clientSecret = process.env.PAYPAL_CLIENT_SECRET!;
-    const baseUrl = process.env.PAYMENT_MODE === 'production' ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com';
+    const baseUrl = this.payPalApiBaseUrl();
     const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
     const tokenResponse = await fetch(`${baseUrl}/v1/oauth2/token`, {
       method: 'POST',
@@ -782,8 +842,9 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         throw new BadRequestException('PayPal order does not belong to the stored application order');
       }
       if (capture && String(capture.status).toUpperCase() === 'COMPLETED') {
-        const amountMinor = Math.round(Number(capture.amount?.value) * 100);
-        if (amountMinor !== Number(order.gateway_amount) ||
+        const amountMinor = this.paypalAmountToMinorUnits(capture.amount?.value);
+        if (amountMinor === null ||
+            this.toMinorUnits(amountMinor) !== this.toMinorUnits(order.gateway_amount) ||
             String(capture.amount?.currency_code).toUpperCase() !== String(order.gateway_currency).toUpperCase()) {
           throw new BadRequestException('PayPal capture amount or currency does not match the stored order');
         }
@@ -1212,12 +1273,15 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     }
 
     const amountMinor = order.provider === 'paypal'
-      ? Math.round(Number(providerRefund.amount?.value) * 100)
+      ? this.paypalAmountToMinorUnits(providerRefund.amount?.value)
       : Number(providerRefund.amount);
+    if (order.provider === 'paypal' && amountMinor === null) {
+      throw new BadRequestException('PayPal refund amount is missing or malformed');
+    }
     return this.recordRefund(order, {
       refundId: providerRefund.id,
       providerPaymentId,
-      amountMinor,
+      amountMinor: amountMinor ?? undefined,
       currency: order.provider === 'paypal' ? providerRefund.amount?.currency_code : providerRefund.currency,
       status: this.normalizeRefundStatus(providerRefund.status),
       actorUserId,
@@ -1443,9 +1507,10 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (String(payload.event_type) === 'PAYMENT.CAPTURE.COMPLETED') {
-      const capturedMinorUnits = Math.round(Number(resource?.amount?.value) * 100);
+      const capturedMinorUnits = this.paypalAmountToMinorUnits(resource?.amount?.value);
       if (String(resource?.status).toUpperCase() !== 'COMPLETED' ||
-          !Number.isFinite(capturedMinorUnits) || capturedMinorUnits !== Number(order.gateway_amount) ||
+          capturedMinorUnits === null ||
+          this.toMinorUnits(capturedMinorUnits) !== this.toMinorUnits(order.gateway_amount) ||
           String(resource?.amount?.currency_code).toUpperCase() !== String(order.gateway_currency).toUpperCase()) {
         throw new BadRequestException('PayPal capture amount or currency does not match the order');
       }
@@ -1462,10 +1527,12 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     } else if (String(payload.event_type) === 'PAYMENT.CAPTURE.REFUNDED') {
       const captureLink = (resource?.links as Record<string, any>[] | undefined)?.find((link) => link.rel === 'up')?.href;
       const captureId = resource?.supplementary_data?.related_ids?.capture_id || captureLink?.split('/').pop();
+      const refundMinorUnits = this.paypalAmountToMinorUnits(resource?.amount?.value);
+      if (refundMinorUnits === null) throw new BadRequestException('PayPal refund amount is missing or malformed');
       await this.recordRefund(order, {
         refundId: resource?.id,
         providerPaymentId: captureId,
-        amountMinor: resource?.amount?.value != null ? Math.round(Number(resource.amount.value) * 100) : undefined,
+        amountMinor: refundMinorUnits,
         currency: resource?.amount?.currency_code || order.gateway_currency,
         status: this.normalizeRefundStatus(resource?.status),
         eventId,

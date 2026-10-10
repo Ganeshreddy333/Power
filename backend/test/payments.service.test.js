@@ -567,6 +567,32 @@ describe('PaymentsService gateway settlement checks', () => {
     expect(settle).not.toHaveBeenCalled();
   });
 
+  it('does not settle PayPal captures with a mismatched currency', async () => {
+    const paypalOrder = order({ provider: 'paypal', provider_order_id: 'pp_a' });
+    const data = { list: jest.fn().mockResolvedValue([paypalOrder]) };
+    const service = new PaymentsService(data);
+    jest.spyOn(service, 'payPalRequest').mockResolvedValue({
+      id: 'pp_a',
+      status: 'COMPLETED',
+      purchase_units: [{ custom_id: 'order-a', payments: { captures: [{ id: 'cap_a', status: 'COMPLETED', amount: { value: '149.00', currency_code: 'INR' } }] } }],
+    });
+    const settle = jest.spyOn(service, 'markOrderPaid');
+
+    await expect(service.capturePayPalOrder('token-a', 'pp_a')).rejects.toThrow('amount or currency');
+
+    expect(settle).not.toHaveBeenCalled();
+  });
+
+  it('does not repeat a PayPal capture request for an already paid order', async () => {
+    const data = { list: jest.fn().mockResolvedValue([order({ provider: 'paypal', provider_order_id: 'pp_a', status: 'PAID' })]) };
+    const service = new PaymentsService(data);
+    const request = jest.spyOn(service, 'payPalRequest');
+
+    await expect(service.capturePayPalOrder('token-a', 'pp_a')).resolves.toMatchObject({ status: 'PAID' });
+
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it('recovers a completed PayPal capture after a lost capture response', async () => {
     const paypalOrder = order({ provider: 'paypal', provider_order_id: 'pp_a' });
     const data = { list: jest.fn().mockResolvedValue([paypalOrder]) };

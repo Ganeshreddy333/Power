@@ -30,6 +30,8 @@ Before enabling checkout, configure each provider that will be offered:
 
 The webhook URLs above are deployment targets, not verified live endpoints. Confirm reachability, signing secrets, provider retries, and test-mode transactions in each provider dashboard before launch. A successful browser redirect is not proof of settlement. Do not enable a provider in the checkout UI unless its live credentials and webhooks have been verified.
 
+If PayPal order creation rejects the provider response, inspect the `PAYPAL_ORDER_RESPONSE_MISMATCH` backend log. It records the internal/provider order IDs, configured API environment, and expected/requested/returned amount and currency without logging credentials or attendee data. Confirm the live application credentials match the configured production API environment; do not bypass the amount/currency check.
+
 Apply and verify database migrations before deploying checkout: run `npm run migrate:deploy` from `backend/`. Payment success is displayed only after the no-cache status endpoint confirms a matching successful transaction for the exact order; receipts require that exact order ID and verified payment record. Before launch, run `npm test -- --runInBand` from `backend/` and complete separate sandbox payments for at least two customers, confirming that each status and receipt contains only its own order/payment identifiers and amounts.
 
 For a fresh Hostinger database, import `backend/prisma/hostinger-bootstrap.sql` through phpMyAdmin. For an existing database, run only the new `backend/prisma/migrations/20261011010000_email_notification_outbox/migration.sql` once; do not re-import the full bootstrap script.
