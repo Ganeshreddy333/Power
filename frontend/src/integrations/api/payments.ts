@@ -186,6 +186,7 @@ export const openRazorpayCheckout = async (
   await loadRazorpayCheckout();
   if (!window.Razorpay) throw new Error("Razorpay checkout is unavailable");
   if (!order.keyId) throw new Error("Razorpay key is missing");
+  if (order.gatewayCurrency.toUpperCase() !== "USD") throw new Error("Razorpay checkout must be charged in USD");
 
   return new Promise<RazorpayResult>((resolve) => {
     let settled = false;

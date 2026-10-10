@@ -20,13 +20,13 @@ This guide will help you deploy your conference application using the following 
 
 ## Payment Go-Live Gate
 
-The payment code defaults to sandbox mode. In `NODE_ENV=production`, checkout is rejected unless `PAYMENT_MODE=production`, the selected provider has live credentials and webhook verification configured, the frontend origin uses HTTPS, and Razorpay has an explicit positive `RAZORPAY_USD_TO_INR` rate. The admin provider-status panel applies the same checks.
+The payment code defaults to sandbox mode. In `NODE_ENV=production`, checkout is rejected unless `PAYMENT_MODE=production`, the selected provider has live credentials and webhook verification configured, and the frontend origin uses HTTPS. Razorpay and PayPal orders are created in USD minor units; the merchant account must accept USD. Checkout fails if a provider rejects USD or returns an order with an unexpected amount or currency.
 
 Before enabling checkout, configure each provider that will be offered:
 
-- Razorpay: live `RAZORPAY_KEY_ID`/`RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, and the agreed USD-to-INR rate. Register `https://<api-domain>/payments/webhook/razorpay` for captured, failed, and refund events.
+- Razorpay: live `RAZORPAY_KEY_ID`/`RAZORPAY_KEY_SECRET` with USD/international payments enabled for the merchant account, plus `RAZORPAY_WEBHOOK_SECRET`. Complete a sandbox USD checkout before launch. Register `https://<api-domain>/payments/webhook/razorpay` for captured, failed, and refund events.
 - Stripe: live `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`. Register `https://<api-domain>/payments/webhook/stripe` for Checkout completion/expiry, PaymentIntent success, and refund updates.
-- PayPal: live `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, and `PAYPAL_WEBHOOK_ID`. Register `https://<api-domain>/payments/webhook/paypal` for capture completed/denied and capture refunded events.
+- PayPal: live `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, and `PAYPAL_WEBHOOK_ID`, with USD enabled for the merchant account. Complete a sandbox USD checkout before launch. Register `https://<api-domain>/payments/webhook/paypal` for capture completed/denied and capture refunded events.
 
 The webhook URLs above are deployment targets, not verified live endpoints. Confirm reachability, signing secrets, provider retries, and test-mode transactions in each provider dashboard before launch. A successful browser redirect is not proof of settlement. Do not enable a provider in the checkout UI unless its live credentials and webhooks have been verified.
 

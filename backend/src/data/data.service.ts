@@ -971,7 +971,6 @@ export class DataService {
     const paymentMode = String(process.env.PAYMENT_MODE || 'sandbox').toLowerCase();
     const liveModeReady = !production || paymentMode === 'production';
     const httpsReady = !production || String(process.env.FRONTEND_URL || '').split(',').every((url) => url.trim().startsWith('https://'));
-    const razorpayRateReady = !production || (Number.isFinite(Number(process.env.RAZORPAY_USD_TO_INR)) && Number(process.env.RAZORPAY_USD_TO_INR) > 0);
     const razorpayKeyId = String(process.env.RAZORPAY_KEY_ID || '');
     const razorpayKeyModeReady = (razorpayKeyId.startsWith('rzp_live_') && production && paymentMode === 'production') ||
       (razorpayKeyId.startsWith('rzp_test_') && paymentMode === 'sandbox');
@@ -985,7 +984,7 @@ export class DataService {
         mode: process.env.PAYMENT_MODE || 'sandbox',
       },
       razorpay: {
-        configured: Boolean(razorpayKeyModeReady && process.env.RAZORPAY_KEY_SECRET && process.env.RAZORPAY_WEBHOOK_SECRET && httpsReady && razorpayRateReady),
+        configured: Boolean(razorpayKeyModeReady && process.env.RAZORPAY_KEY_SECRET && process.env.RAZORPAY_WEBHOOK_SECRET && httpsReady),
         mode: paymentMode,
       },
       phonepe: {
@@ -1070,7 +1069,6 @@ export class DataService {
         doc.text(`Accommodation Total: ${money(order.accommodation_total, cur)}`);
       }
       doc.text(`Total: ${money(order.final_amount, cur)}`);
-      // Razorpay settles in INR: show what was actually charged at the gateway.
       doc.text(`Charged at gateway: ${String(successfulPayment.gateway_currency)} ${(Number(successfulPayment.gateway_amount) / 100).toFixed(2)}`);
     } else {
       doc.text(`Amount: ${money(registration.amount_usd ?? registration.amount, String(registration.currency || 'USD'))}`);
@@ -1301,7 +1299,7 @@ export class DataService {
         reference_id: registrationId,
         custom_id: registrationId,
         description: String(registration.plan_name || 'Conference registration'),
-        amount: { currency_code: String(registration.currency || 'USD').toUpperCase(), value: amount.toFixed(2) },
+        amount: { currency_code: 'USD', value: amount.toFixed(2) },
       }],
       application_context: {
         return_url: `${frontendUrl}/registration/success?provider=paypal&registration_id=${encodeURIComponent(registrationId)}`,

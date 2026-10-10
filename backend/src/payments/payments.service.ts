@@ -107,7 +107,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         discount: pricing.discountAmount,
         tax: pricing.taxAmount,
         final: Math.round((pricing.finalAmount + accommodationTotal) * 100) / 100,
-        currency: pricing.currency,
+        currency: 'USD',
       },
     };
   }
@@ -139,9 +139,6 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     if (production && provider === 'razorpay') {
       if (!process.env.RAZORPAY_WEBHOOK_SECRET) {
         throw new ServiceUnavailableException('razorpay webhook verification is not configured');
-      }
-      if (!Number.isFinite(Number(process.env.RAZORPAY_USD_TO_INR)) || Number(process.env.RAZORPAY_USD_TO_INR) <= 0) {
-        throw new ServiceUnavailableException('A positive Razorpay USD-to-INR rate is required in production');
       }
       const frontendUrls = String(process.env.FRONTEND_URL || '').split(',').map((url) => url.trim());
       if (!frontendUrls.length || frontendUrls.some((url) => !url.startsWith('https://'))) {
@@ -250,7 +247,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         discount_amount: pricing.discountAmount,
         tax_amount: pricing.taxAmount,
         final_amount: finalAmount,
-        currency: pricing.currency,
+        currency: 'USD',
         gateway_amount: gateway.amount,
         gateway_currency: gateway.currency,
         coupon_code: pricing.couponCode,
@@ -340,14 +337,9 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  // Convert the authoritative USD amount into the gateway's smallest unit. (#5)
+  // Gateway amounts are USD minor units (cents) for every supported provider.
   private toGatewayAmount(provider: PaymentProvider, amountUsd: number) {
-    if (provider === 'razorpay') {
-      const rate = Number(process.env.RAZORPAY_USD_TO_INR || 90);
-      const inr = Math.round(amountUsd * rate * 100) / 100;
-      return { amount: Math.round(inr * 100), currency: 'INR' }; // paise
-    }
-    return { amount: Math.round(amountUsd * 100), currency: 'USD' }; // cents
+    return { amount: Math.round(amountUsd * 100), currency: 'USD' };
   }
 
   private generateOrderNumber() {
@@ -370,8 +362,8 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
       method: 'POST',
       headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        amount: Number(order.gateway_amount), // paise
-        currency: order.gateway_currency,
+        amount: Number(order.gateway_amount), // cents
+        currency: 'USD',
         receipt: order.order_number,
         notes: { registration_id: order.registration_id, order_id: order.id },
       }),
@@ -379,7 +371,10 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     });
     const result = (await response.json().catch(() => ({}))) as any;
     if (!response.ok || !result.id) {
-      throw new BadRequestException(result?.error?.description || 'Razorpay could not create an order');
+      throw new BadRequestException(result?.error?.description || 'Razorpay could not create a USD order');
+    }
+    if (Number(result.amount) !== Number(order.gateway_amount) || String(result.currency).toUpperCase() !== 'USD') {
+      throw new BadRequestException('Razorpay created an order with an unexpected amount or currency');
     }
     this.log('RAZORPAY_ORDER_CREATED', { orderId: order.id, providerOrderId: result.id });
     return { id: String(result.id) };
@@ -426,7 +421,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         reference_id: order.id,
         custom_id: order.id,
         description: String(reg.plan_name || 'Conference registration'),
-        amount: { currency_code: 'USD', value: Number(order.final_amount).toFixed(2) },
+        amount: { currency_code: 'USD', value: (Number(order.gateway_amount) / 100).toFixed(2) },
       }],
       application_context: {
         return_url: `${frontendUrl}/registration/success?provider=paypal&order=${encodeURIComponent(order.access_token)}`,
@@ -434,6 +429,13 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         user_action: 'PAY_NOW',
       },
     });
+    const purchaseUnit = (paypalOrder.purchase_units as Record<string, any>[] | undefined)?.[0];
+    const paypalAmount = purchaseUnit?.amount as Record<string, any> | undefined;
+    if (!paypalAmount ||
+        String(paypalAmount.currency_code).toUpperCase() !== 'USD' ||
+        Math.round(Number(paypalAmount.value) * 100) !== Number(order.gateway_amount)) {
+      throw new BadRequestException('PayPal created an order with an unexpected amount or currency');
+    }
     const approvalUrl = (paypalOrder.links as any[])?.find((link) => link.rel === 'approve')?.href;
     if (!approvalUrl) throw new BadRequestException('PayPal did not return an approval URL');
     this.log('PAYPAL_ORDER_CREATED', { orderId: order.id, providerOrderId: paypalOrder.id });

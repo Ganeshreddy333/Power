@@ -867,6 +867,7 @@ const PricingSection = () => {
                       <SelectItem value="stripe">Stripe</SelectItem>
                     </SelectContent>
                   </Select>
+                  <p className="mt-2 text-xs text-muted-foreground">Checkout and payment amounts are in USD.</p>
                 </div>
                 <div className="space-y-3 text-sm text-muted-foreground">
                   <p className="flex justify-between gap-4">

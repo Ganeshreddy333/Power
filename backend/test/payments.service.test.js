@@ -224,7 +224,7 @@ describe('PaymentsService gateway settlement checks', () => {
   });
 
   it('allows Razorpay test credentials in sandbox mode on a production deployment', () => {
-    const keys = ['NODE_ENV', 'PAYMENT_MODE', 'FRONTEND_URL', 'RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'RAZORPAY_WEBHOOK_SECRET', 'RAZORPAY_USD_TO_INR'];
+    const keys = ['NODE_ENV', 'PAYMENT_MODE', 'FRONTEND_URL', 'RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'RAZORPAY_WEBHOOK_SECRET'];
     const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
     Object.assign(process.env, {
       NODE_ENV: 'production',
@@ -233,7 +233,6 @@ describe('PaymentsService gateway settlement checks', () => {
       RAZORPAY_KEY_ID: 'rzp_test_key',
       RAZORPAY_KEY_SECRET: 'test-secret',
       RAZORPAY_WEBHOOK_SECRET: 'test-webhook-secret',
-      RAZORPAY_USD_TO_INR: '90',
     });
 
     try {
