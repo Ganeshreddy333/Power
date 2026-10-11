@@ -498,7 +498,9 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
       });
       throw new BadRequestException('PayPal created an order with an unexpected amount or currency');
     }
-    const approvalUrl = (paypalOrder.links as any[])?.find((link) => link.rel === 'approve')?.href;
+    const approvalUrl = (paypalOrder.links as any[])?.find(
+      (link) => ['approve', 'payer-action'].includes(link.rel) && typeof link.href === 'string' && link.href,
+    )?.href;
     if (!approvalUrl) throw new BadRequestException('PayPal did not return an approval URL');
     this.log('PAYPAL_ORDER_CREATED', { orderId: order.id, providerOrderId: paypalOrder.id });
     return { id: String(paypalOrder.id), url: String(approvalUrl) };
@@ -574,6 +576,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
       headers: {
         Authorization: `Bearer ${tokenData.access_token}`,
         'Content-Type': 'application/json',
+        Prefer: 'return=representation',
         ...(requestId ? { 'PayPal-Request-Id': requestId } : {}),
       },
       body: body ? JSON.stringify(body) : undefined,

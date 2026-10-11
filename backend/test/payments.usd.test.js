@@ -128,6 +128,18 @@ describe('USD gateway orders', () => {
       .rejects.toThrow('approval URL');
   });
 
+  it('accepts PayPal payer-action links for buyer approval', async () => {
+    const service = new PaymentsService({});
+    jest.spyOn(service, 'payPalRequest').mockResolvedValue({
+      id: 'pp_order_usd',
+      purchase_units: [{ amount: { currency_code: 'USD', value: '149.01' } }],
+      links: [{ rel: 'payer-action', href: 'https://paypal.example/approve' }],
+    });
+
+    await expect(service.attachPayPalOrder(paypalOrder(), { plan_name: 'Speaker' }))
+      .resolves.toEqual({ id: 'pp_order_usd', url: 'https://paypal.example/approve' });
+  });
+
   it('propagates PayPal API errors without treating order creation as successful', async () => {
     const service = new PaymentsService({});
     jest.spyOn(service, 'payPalRequest').mockRejectedValue(new Error('PayPal API unavailable'));
@@ -162,6 +174,7 @@ describe('USD gateway orders', () => {
         'https://api-m.paypal.com/v1/oauth2/token',
         'https://api-m.paypal.com/v2/checkout/orders',
       ]);
+      expect(global.fetch.mock.calls[1][1].headers.Prefer).toBe('return=representation');
     } finally {
       global.fetch = originalFetch;
       if (originalMode === undefined) delete process.env.PAYMENT_MODE;
