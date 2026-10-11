@@ -16,6 +16,7 @@ import {
   verifyRazorpayPayment,
 } from "@/integrations/api/payments";
 import { type ImportantDateItem, type PricingRow, toLocalDate, useConferenceSettings } from "@/lib/conferenceSettings";
+import { isTenDigitPhoneNumber, normalizePhoneNumber } from "@/lib/phone";
 import CaptchaVerification from "@/components/CaptchaVerification";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -401,6 +402,18 @@ const PricingSection = () => {
       return;
     }
 
+    if (
+      (formValues.phone && !isTenDigitPhoneNumber(formValues.phone)) ||
+      (formValues.whatsApp && !isTenDigitPhoneNumber(formValues.whatsApp))
+    ) {
+      toast({
+        title: "Invalid phone number",
+        description: "Enter exactly 10 digits for each phone or WhatsApp number provided.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     if (!formValues.email.includes("@")) {
       toast({
         title: "Enter a valid email",
@@ -506,7 +519,8 @@ const PricingSection = () => {
       .insert({
         full_name: [formValues.title, formValues.name].filter(Boolean).join(" "),
         email: formValues.email.trim(),
-        phone: formValues.phone.trim() || formValues.whatsApp.trim() || "Not provided",
+        phone: formValues.phone.trim() || formValues.whatsApp.trim(),
+        whatsapp: formValues.whatsApp.trim(),
         affiliation: formValues.organization.trim(),
         country: formValues.country === "Other" ? otherCountry.trim() : formValues.country,
         coupon_code: effectiveCoupon?.code || null,
@@ -644,16 +658,36 @@ const PricingSection = () => {
                 <Input type="email" placeholder="Email" value={formValues.email} onChange={(event) => updateFormValue("email", event.target.value)} />
               </div>
               <div>
-                <label className="mb-2 block text-sm font-semibold text-foreground">Phone</label>
-                <Input placeholder="Phone" value={formValues.phone} onChange={(event) => updateFormValue("phone", event.target.value)} />
+                <label className="mb-2 block text-sm font-semibold text-foreground">Phone (10 digits)</label>
+                <Input
+                  type="tel"
+                  inputMode="numeric"
+                  pattern="[0-9]{10}"
+                  minLength={10}
+                  maxLength={10}
+                  title="Enter exactly 10 digits."
+                  placeholder="Phone"
+                  value={formValues.phone}
+                  onChange={(event) => updateFormValue("phone", normalizePhoneNumber(event.target.value))}
+                />
               </div>
               <div>
                 <label className="mb-2 block text-sm font-semibold text-foreground">Alt Email</label>
                 <Input type="email" placeholder="Email" value={formValues.altEmail} onChange={(event) => updateFormValue("altEmail", event.target.value)} />
               </div>
               <div>
-                <label className="mb-2 block text-sm font-semibold text-foreground">WhatsApp Number</label>
-                <Input placeholder="WhatsApp Number" value={formValues.whatsApp} onChange={(event) => updateFormValue("whatsApp", event.target.value)} />
+                <label className="mb-2 block text-sm font-semibold text-foreground">WhatsApp Number (10 digits)</label>
+                <Input
+                  type="tel"
+                  inputMode="numeric"
+                  pattern="[0-9]{10}"
+                  minLength={10}
+                  maxLength={10}
+                  title="Enter exactly 10 digits."
+                  placeholder="WhatsApp Number"
+                  value={formValues.whatsApp}
+                  onChange={(event) => updateFormValue("whatsApp", normalizePhoneNumber(event.target.value))}
+                />
               </div>
               <div>
                 <label className="mb-2 block text-sm font-semibold text-foreground">Organization*</label>

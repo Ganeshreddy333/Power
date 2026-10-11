@@ -12,6 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { normalizePhoneNumber } from "@/lib/phone";
 
 const HeroSection = () => {
   const { values } = useSiteData();
@@ -44,6 +45,7 @@ const HeroSection = () => {
     const { error } = await apiClient.from("contact_messages").insert({
       name: fullName,
       email,
+      phone: mobileNumber,
       subject: "Brochure download request",
       message: [
         `Mobile Number: ${mobileNumber}`,
@@ -252,8 +254,20 @@ const HeroSection = () => {
                   <Input name="email" type="email" required />
                 </label>
                 <label className="grid gap-1.5 text-sm font-semibold">
-                  Mobile Number*
-                  <Input name="mobileNumber" type="tel" required />
+                  Mobile Number (10 digits)*
+                  <Input
+                    name="mobileNumber"
+                    type="tel"
+                    inputMode="numeric"
+                    pattern="[0-9]{10}"
+                    minLength={10}
+                    maxLength={10}
+                    title="Enter exactly 10 digits."
+                    onChange={(event) => {
+                      event.currentTarget.value = normalizePhoneNumber(event.currentTarget.value);
+                    }}
+                    required
+                  />
                 </label>
                 <label className="grid gap-1.5 text-sm font-semibold">
                   Company / Organization*

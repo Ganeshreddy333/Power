@@ -13,6 +13,7 @@ import { splitLines, useWebsiteContent } from "@/hooks/useWebsiteContent";
 import { apiClient } from "@/integrations/api/client";
 import { Upload, FileText, Download, X } from "lucide-react";
 import CaptchaVerification from "@/components/CaptchaVerification";
+import { isTenDigitPhoneNumber, normalizePhoneNumber } from "@/lib/phone";
 
 type StoredFileInfo = {
   name: string;
@@ -348,6 +349,15 @@ const AbstractSubmission = () => {
       return;
     }
 
+    if (!isTenDigitPhoneNumber(formData.phone)) {
+      toast({
+        title: "Invalid phone number",
+        description: "Enter a phone number with exactly 10 digits.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     if (selectedFiles.length === 0) {
       toast({
         title: "Document required",
@@ -493,8 +503,18 @@ const AbstractSubmission = () => {
                   <Input type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} required />
                 </div>
                 <div>
-                  <label className="text-sm font-body font-medium text-card-foreground mb-1 block">Phone *</label>
-                  <Input type="tel" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} required />
+                  <label className="text-sm font-body font-medium text-card-foreground mb-1 block">Phone (10 digits) *</label>
+                  <Input
+                    type="tel"
+                    inputMode="numeric"
+                    pattern="[0-9]{10}"
+                    minLength={10}
+                    maxLength={10}
+                    title="Enter exactly 10 digits."
+                    value={formData.phone}
+                    onChange={(e) => setFormData({ ...formData, phone: normalizePhoneNumber(e.target.value) })}
+                    required
+                  />
                 </div>
               </div>
 

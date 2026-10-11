@@ -12,6 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/integrations/api/client";
 import { useLiveContentRefresh } from "@/hooks/useLiveContentRefresh";
 import type { Tables } from "@/integrations/api/types";
+import { isTenDigitPhoneNumber, normalizePhoneNumber } from "@/lib/phone";
 
 type InformationBlock = Tables<"information_blocks">;
 
@@ -177,6 +178,14 @@ const Information = () => {
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!isTenDigitPhoneNumber(form.phone)) {
+      toast({
+        title: "Invalid phone number",
+        description: "Enter a phone number with exactly 10 digits.",
+        variant: "destructive",
+      });
+      return;
+    }
     setIsSubmitting(true);
 
     const { error } = await (apiClient as any).from("contact_messages").insert({
@@ -336,7 +345,18 @@ const Information = () => {
               <Input required type="email" placeholder="Email" value={form.email} onChange={(event) => updateForm("email", event.target.value)} />
             </div>
             <div className="grid gap-5 md:grid-cols-2">
-              <Input required type="tel" placeholder="Phone Number" value={form.phone} onChange={(event) => updateForm("phone", event.target.value)} />
+              <Input
+                required
+                type="tel"
+                inputMode="numeric"
+                pattern="[0-9]{10}"
+                minLength={10}
+                maxLength={10}
+                title="Enter exactly 10 digits."
+                placeholder="Phone Number (10 digits)"
+                value={form.phone}
+                onChange={(event) => updateForm("phone", normalizePhoneNumber(event.target.value))}
+              />
               <Input required placeholder="Subject" value={form.subject} onChange={(event) => updateForm("subject", event.target.value)} />
             </div>
             <Textarea required placeholder="Enter Message" rows={6} value={form.message} onChange={(event) => updateForm("message", event.target.value)} />

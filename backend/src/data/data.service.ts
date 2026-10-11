@@ -398,7 +398,9 @@ export class DataService {
     const email = String(payload.email || '').trim().toLowerCase();
     const affiliation = String(payload.affiliation || '').trim();
     const country = String(payload.country || '').trim();
-    const phone = String(payload.phone || '').trim();
+    const requestedPhone = String(payload.phone || '').trim();
+    const phone = requestedPhone === 'Not provided' ? '' : requestedPhone;
+    const whatsapp = String(payload.whatsapp || '').trim();
     const planKey = String(payload.plan_key || '').trim().toLowerCase();
     const provider = String(payload.payment_provider || 'stripe').toLowerCase();
     const quantity = Number(payload.quantity ?? 1);
@@ -411,7 +413,9 @@ export class DataService {
     if (!affiliation || affiliation.length > 200 || !country || country.length > 100) {
       throw new BadRequestException('Organization and country are required');
     }
-    if (phone.length > 32) throw new BadRequestException('Phone number is too long');
+    if ((phone && !/^\d{10}$/.test(phone)) || (whatsapp && !/^\d{10}$/.test(whatsapp))) {
+      throw new BadRequestException('Phone and WhatsApp numbers must contain exactly 10 digits');
+    }
     if (!['stripe', 'paypal', 'razorpay'].includes(provider)) throw new BadRequestException('Unsupported payment provider');
 
     const pricing = await this.computeRegistrationAmount(planKey, String(payload.coupon_code || '').trim(), quantity);
@@ -423,7 +427,7 @@ export class DataService {
     return this.insert('registration_intents', {
       full_name: fullName,
       email,
-      phone: phone || 'Not provided',
+      phone: phone || whatsapp || 'Not provided',
       affiliation,
       country,
       designation: String(payload.designation || pricing.planLabel).trim(),
@@ -446,8 +450,10 @@ export class DataService {
   async createPublicContactMessage(payload: Record<string, unknown>) {
     const name = String(payload.name || '').trim();
     const email = String(payload.email || '').trim().toLowerCase();
+    const phone = String(payload.phone || '').trim();
     const message = String(payload.message || '').trim();
     if (!name || !/^\S+@\S+\.\S+$/.test(email) || !message) throw new BadRequestException('Name, email, and message are required');
+    if (phone && !/^\d{10}$/.test(phone)) throw new BadRequestException('A valid 10-digit phone number is required');
     const subject = String(payload.subject || '').trim().slice(0, 255);
     const created = await this.insert('contact_messages', { name, email, subject, message: message.slice(0, 10000), status: 'new' }) as Record<string, unknown>;
     if (subject.toLowerCase() === 'brochure download request') {
@@ -463,8 +469,10 @@ export class DataService {
   async createPublicAbstractSubmission(payload: Record<string, unknown>) {
     const fullName = String(payload.full_name || '').trim();
     const email = String(payload.email || '').trim().toLowerCase();
+    const phone = String(payload.phone || '').trim();
     const title = String(payload.abstract_title || '').trim();
     if (!fullName || !/^\S+@\S+\.\S+$/.test(email) || !title) throw new BadRequestException('Name, email, and abstract title are required');
+    if (!/^\d{10}$/.test(phone)) throw new BadRequestException('A valid 10-digit phone number is required');
     const allowed = TABLES.abstract_submissions.writable;
     const cleaned = Object.fromEntries(Object.entries(payload).filter(([key]) => allowed.includes(key)));
     const created = await this.insert('abstract_submissions', {
