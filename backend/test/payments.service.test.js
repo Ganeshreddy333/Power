@@ -43,6 +43,26 @@ describe('PaymentsService gateway settlement checks', () => {
     expect(sanitized.message).toBe('We could not start your payment.');
   });
 
+  it('queues a payment-failure email only on the first authoritative order transition', async () => {
+    const pendingOrder = order({ coupon_code: 'SAVE10' });
+    const data = {
+      list: jest.fn().mockResolvedValue([pendingOrder]),
+      insert: jest.fn().mockResolvedValue(undefined),
+      transitionOrderWithEmailNotification: jest.fn().mockResolvedValue(true),
+      releaseCoupon: jest.fn(),
+      releaseRegistrationCheckoutClaim: jest.fn(),
+    };
+    const service = new PaymentsService(data);
+
+    await service.recordFailedPayment(pendingOrder, { code: 'PAYMENT_FAILED', eventId: 'provider-event-1' });
+
+    expect(data.transitionOrderWithEmailNotification).toHaveBeenCalledWith(
+      pendingOrder.id, ['CREATED', 'PENDING'], 'FAILED', 'PAYMENT_FAILED', 'provider-event-1',
+    );
+    expect(data.releaseCoupon).toHaveBeenCalledWith('SAVE10');
+    expect(data.releaseRegistrationCheckoutClaim).toHaveBeenCalledWith(pendingOrder.registration_id);
+  });
+
   it('quotes accommodation on top of registration without discounting the room', async () => {
     const data = {
       computeRegistrationAmount: jest.fn().mockResolvedValue({
@@ -148,13 +168,16 @@ describe('PaymentsService gateway settlement checks', () => {
     const pendingOrder = order({ access_token: 'token-a', coupon_code: null });
     const data = {
       list: jest.fn(async (_table, filters = {}) => filters.access_token === 'token-a' ? [pendingOrder] : []),
-      transitionOrderStatus: jest.fn().mockResolvedValue(true),
+      transitionOrderWithEmailNotification: jest.fn().mockResolvedValue(true),
       releaseRegistrationCheckoutClaim: jest.fn(),
     };
     const service = new PaymentsService(data);
 
     await service.cancelOrder('token-a');
 
+    expect(data.transitionOrderWithEmailNotification).toHaveBeenCalledWith(
+      pendingOrder.id, ['CREATED', 'PENDING', 'FAILED'], 'CANCELLED', 'PAYMENT_CANCELLED',
+    );
     expect(data.releaseRegistrationCheckoutClaim).toHaveBeenCalledWith(pendingOrder.registration_id);
   });
 
@@ -162,13 +185,16 @@ describe('PaymentsService gateway settlement checks', () => {
     const staleOrder = order({ coupon_code: null });
     const data = {
       findStaleOpenOrders: jest.fn().mockResolvedValue([staleOrder]),
-      transitionOrderStatus: jest.fn().mockResolvedValue(true),
+      transitionOrderWithEmailNotification: jest.fn().mockResolvedValue(true),
       releaseRegistrationCheckoutClaim: jest.fn(),
     };
     const service = new PaymentsService(data);
 
     await service.cleanupStaleOrders();
 
+    expect(data.transitionOrderWithEmailNotification).toHaveBeenCalledWith(
+      staleOrder.id, ['CREATED', 'PENDING'], 'CANCELLED', 'PAYMENT_CANCELLED',
+    );
     expect(data.releaseRegistrationCheckoutClaim).toHaveBeenCalledWith(staleOrder.registration_id);
   });
 
@@ -648,6 +674,7 @@ describe('PaymentsService gateway settlement checks', () => {
       insert: jest.fn(async (_table, payload) => payload),
       update: jest.fn(),
       recordPaymentAudit: jest.fn(),
+      queueRefundConfirmationNotification: jest.fn(),
     };
     const service = new PaymentsService(data);
     const payload = {
@@ -673,6 +700,7 @@ describe('PaymentsService gateway settlement checks', () => {
       insert: jest.fn(async (_table, payload) => payload),
       update: jest.fn(),
       recordPaymentAudit: jest.fn(),
+      queueRefundConfirmationNotification: jest.fn(),
       releaseOrderRefundClaim: jest.fn(),
     };
     const service = new PaymentsService(data);
@@ -711,6 +739,7 @@ describe('PaymentsService gateway settlement checks', () => {
       update: jest.fn(),
       updateRegistrationPayment: jest.fn(),
       recordPaymentAudit: jest.fn(),
+      queueRefundConfirmationNotification: jest.fn(),
     };
     const service = new PaymentsService(data);
 
@@ -731,6 +760,7 @@ describe('PaymentsService gateway settlement checks', () => {
       status: 'SUCCEEDED',
     }));
     expect(data.update).toHaveBeenCalledWith('orders', paidOrder.id, { status: 'REFUNDED' });
+    expect(data.queueRefundConfirmationNotification).toHaveBeenCalledWith(paidOrder.id, 'refund-a');
   });
 
   it('advances a pending refund to succeeded without creating a second refund', async () => {
@@ -756,6 +786,7 @@ describe('PaymentsService gateway settlement checks', () => {
       updateRegistrationPayment: jest.fn(),
       releaseOrderRefundClaim: jest.fn(),
       recordPaymentAudit: jest.fn(),
+      queueRefundConfirmationNotification: jest.fn(),
     };
     const service = new PaymentsService(data);
 
@@ -780,6 +811,7 @@ describe('PaymentsService gateway settlement checks', () => {
       insert: jest.fn(),
       update: jest.fn(),
       recordPaymentAudit: jest.fn(),
+      queueRefundConfirmationNotification: jest.fn(),
     };
     const service = new PaymentsService(data);
 

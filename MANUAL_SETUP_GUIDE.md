@@ -889,19 +889,6 @@ export const useAuthStore = create<AuthStore>(
         set({ user: data.user, token: data.accessToken, isAuthenticated: true });
       },
 
-      register: async (email, password, firstName, lastName) => {
-        const response = await fetch('http://localhost:3001/auth/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, password, firstName, lastName }),
-        });
-
-        if (!response.ok) throw new Error('Registration failed');
-
-        const data = await response.json();
-        set({ user: data.user, token: data.accessToken, isAuthenticated: true });
-      },
-
       logout: () => {
         set({ user: null, token: null, isAuthenticated: false });
       },

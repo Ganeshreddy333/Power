@@ -472,6 +472,7 @@ CREATE TABLE `email_notifications` (
     `dedupe_key` VARCHAR(191) NOT NULL,
     `type` VARCHAR(64) NOT NULL,
     `recipient` VARCHAR(320) NOT NULL,
+    `recipient_role` VARCHAR(16) NOT NULL DEFAULT 'USER',
     `payload` LONGTEXT NOT NULL,
     `status` VARCHAR(32) NOT NULL DEFAULT 'PENDING',
     `attempts` INT NOT NULL DEFAULT 0,
@@ -510,4 +511,5 @@ INSERT INTO `_prisma_migrations` (`id`, `checksum`, `finished_at`, `migration_na
 ('32785db9-7775-4d61-abd6-f359a573d0bc', '0826810acc4c35dad0bb8c776a2d872331857beb414659bf2da50d8f1181d73c', '2026-10-01 14:00:00.000', '20261001140000_payment_gateway_transaction_amount', NULL, NULL, '2026-10-01 14:00:00.000', 1),
 ('58eb1eed-1e80-4a0c-a09f-612d4e2159fb', '6446d073e10db05689640d906d7d5bec3cfebdd4aaa4040ca0fab293f76c1396', '2026-10-02 17:00:00.000', '20261002170000_speaker_profile_fields', NULL, NULL, '2026-10-02 17:00:00.000', 1),
 ('e6300ae2-a814-42ee-97c6-6e2a16d0f23e', '1d9fc97f4ceba210e49aefcb43f564e91727660b2fcd899989de82193e3618f3', '2026-10-02 18:00:00.000', '20261002180000_accommodation_checkout', NULL, NULL, '2026-10-02 18:00:00.000', 1),
-('16386f6c-85ba-4f3d-afd4-f02e3156cde5', '2665e27d80ad64a40e6301f84a0f002f31cf744b0714e55e948ad72dbb45800d', '2026-10-11 01:00:00.000', '20261011010000_email_notification_outbox', NULL, NULL, '2026-10-11 01:00:00.000', 1);
+('16386f6c-85ba-4f3d-afd4-f02e3156cde5', '2665e27d80ad64a40e6301f84a0f002f31cf744b0714e55e948ad72dbb45800d', '2026-10-11 01:00:00.000', '20261011010000_email_notification_outbox', NULL, NULL, '2026-10-11 01:00:00.000', 1),
+('a9833604-6f20-4e24-a0ce-c408b43547c6', '39ec294cc581bbd17953ad020c2980f4200a816264a72ceb1dde2cd75d82a56f', '2026-10-13 01:00:00.000', '20261013010000_dual_recipient_email_outbox', NULL, NULL, '2026-10-13 01:00:00.000', 1);

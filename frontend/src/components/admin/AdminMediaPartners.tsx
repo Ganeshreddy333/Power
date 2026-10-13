@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Pencil, Plus, Trash2 } from "lucide-react";
+import ImageUploadField from "@/components/admin/ImageUploadField";
 
 type MediaPartner = Tables<"media_partners">;
 
@@ -58,6 +59,8 @@ const AdminMediaPartners = () => {
   const [form, setForm] = useState(emptyPartner);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  const [imageUploading, setImageUploading] = useState(false);
+  const [imagePending, setImagePending] = useState(false);
   const { toast } = useToast();
 
   const fetchPartners = useCallback(async () => {
@@ -200,8 +203,16 @@ const AdminMediaPartners = () => {
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <Input placeholder="Website URL" value={form.website_url} onChange={(e) => setForm({ ...form, website_url: e.target.value })} />
-                <Input placeholder="Logo/Image URL" value={form.logo_url} onChange={(e) => setForm({ ...form, logo_url: e.target.value })} />
               </div>
+              <ImageUploadField
+                bucket="media-partner-images"
+                label="Partner logo or image"
+                value={form.logo_url}
+                onChange={(logo_url) => setForm((current) => ({ ...current, logo_url }))}
+                onUploadingChange={setImageUploading}
+                onPendingChange={setImagePending}
+                active={open}
+              />
               <div>
                 <label className="text-xs text-muted-foreground">Number of cards (0 hides from site)</label>
                 <Input type="number" min="0" placeholder="Number of cards" value={form.display_order} onChange={(e) => setForm({ ...form, display_order: parseInt(e.target.value, 10) || 0 })} />
@@ -211,7 +222,7 @@ const AdminMediaPartners = () => {
                 <span className="text-sm">Visible on site</span>
                 <Switch checked={form.is_visible} onCheckedChange={(checked) => setForm({ ...form, is_visible: checked })} />
               </div>
-              <Button onClick={handleSave} className="w-full">
+              <Button onClick={handleSave} className="w-full" disabled={imageUploading || imagePending}>
                 {editingId ? "Update" : "Create"} Partner
               </Button>
             </div>

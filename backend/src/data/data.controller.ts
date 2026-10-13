@@ -48,6 +48,7 @@ export class DataController {
 
   @Patch('data/:table/:id')
   update(@Param('table') table: string, @Param('id') id: string, @Body() payload: Record<string, unknown>) {
+    if (table === 'abstract_submissions') return this.dataService.updateAbstractSubmission(id, payload);
     return this.dataService.update(table, id, payload);
   }
 

@@ -52,8 +52,13 @@ PAYMENT_PROVIDER=stripe
 CLOUDINARY_CLOUD_NAME=...
 CLOUDINARY_API_KEY=...
 CLOUDINARY_API_SECRET=...
-RESEND_API_KEY=...
-EMAIL_FROM=noreply@your-domain.com
+SMTP_HOST=smtp.hostinger.com
+SMTP_PORT=465
+SMTP_SECURE=true
+SMTP_USER=your-mailbox@your-domain.com
+SMTP_PASS=...
+SMTP_FROM=your-mailbox@your-domain.com
+ADMIN_NOTIFICATION_EMAIL=admin@your-domain.com
 ADMIN_EMAIL=...
 ADMIN_PASSWORD=...
 ADMIN_FIRST_NAME=Admin
@@ -61,6 +66,8 @@ ADMIN_LAST_NAME=User
 ```
 
 Run `npm run seed:admin` once after the first deployment if the admin account does not exist. Configure payment provider webhooks to use the public API domain before enabling production payments.
+
+The centralized email outbox covers brochure requests, contact acknowledgements, abstract submission receipts and review decisions, registration receipts, verified payment confirmations, payment failures/cancellations, and confirmed refunds. The API retries failed deliveries in-process; keep the backend application running. The existing `email_notifications` table is deployed through `npm run migrate:deploy`. SMTP acceptance is recorded as sent by the transport, but does not guarantee inbox placement.
 
 ## Frontend Node.js application
 

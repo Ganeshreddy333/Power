@@ -257,6 +257,7 @@ model EmailNotification {
   dedupeKey     String    @unique @map("dedupe_key")
   type          String    @db.VarChar(64)
   recipient     String    @db.VarChar(320)
+  recipientRole String    @default("USER") @map("recipient_role") @db.VarChar(16)
   payload       String    @db.LongText
   status        String    @default("PENDING") @db.VarChar(32)
   attempts      Int       @default(0)

@@ -6,14 +6,14 @@ This guide will help you deploy your conference application using the following 
 - **Backend**: Render (Free)
 - **Database**: MySQL (Free/local or managed)
 - **Images**: Cloudinary (Free)
-- **Emails**: Resend (Free)
+- **Emails**: Hostinger SMTP via Nodemailer
 
 ---
 
 ## 📋 Pre-Deployment Checklist
 
 - [ ] Node.js 18+ installed locally
-- [ ] All services accounts created (Render or Hostinger, Vercel or Hostinger, Cloudinary, Resend, Hostinger)
+- [ ] Hosting, Cloudinary, and Hostinger email accounts configured
 - [ ] Environment variables prepared
 - [ ] Database migrations tested locally
 - [ ] Code committed to Git repository
@@ -34,7 +34,7 @@ If PayPal order creation rejects the provider response, inspect the `PAYPAL_ORDE
 
 Apply and verify database migrations before deploying checkout: run `npm run migrate:deploy` from `backend/`. Payment success is displayed only after the no-cache status endpoint confirms a matching successful transaction for the exact order; receipts require that exact order ID and verified payment record. Before launch, run `npm test -- --runInBand` from `backend/` and complete separate sandbox payments for at least two customers, confirming that each status and receipt contains only its own order/payment identifiers and amounts.
 
-For a fresh Hostinger database, import `backend/prisma/hostinger-bootstrap.sql` through phpMyAdmin. For an existing database, run only the new `backend/prisma/migrations/20261011010000_email_notification_outbox/migration.sql` once; do not re-import the full bootstrap script.
+For a fresh Hostinger database, import `backend/prisma/hostinger-bootstrap.sql` through phpMyAdmin. For an existing database with Prisma migration history, run `npm run migrate:deploy` from `backend/` to apply all pending migrations, including `20261013010000_dual_recipient_email_outbox`; do not manually apply only the older outbox migration or re-import the full bootstrap script. If migrations were previously applied manually and are missing from `_prisma_migrations`, reconcile the migration history before running `migrate:deploy`.
 
 Accommodation is optional and is included in the same payment order as registration. After applying migrations, configure options in Admin → Accommodation with USD nightly rates and, when applicable, room capacity and availability dates. Guests reserve one room per registration; nights are check-out minus check-in. Coupons and the existing service charge apply to registration only. Configure the conference UTC start/end values in Admin → Settings, or explicitly allow an option to be booked outside that date range, before accepting accommodation reservations.
 
@@ -66,16 +66,11 @@ For Docker Compose, provide `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, `M
    - API Secret (keep this private!)
 3. Store these in environment variables
 
-### 1.3 Resend (Email Service)
+### 1.3 Hostinger SMTP (Email Service)
 
-1. Sign up at [resend.com](https://resend.com)
-2. Go to **API Keys** and create a new key
-3. Add your domain to verified senders (use Hostinger domain)
-4. Copy the API key to environment variables
+Create a mailbox for the conference domain in Hostinger Email, then configure the SMTP variables listed in `backend/.env.example` on the backend only. The standard Hostinger settings are `SMTP_HOST=smtp.hostinger.com`, `SMTP_PORT=465`, and `SMTP_SECURE=true`; set `SMTP_USER`, `SMTP_PASS`, and `SMTP_FROM` to the mailbox credentials and sender address. Do not expose these values through `NEXT_PUBLIC_*` variables.
 
-**Free tier**: 100 emails/day
-
-Abstract submission acknowledgments, brochure-request delivery, and paid-registration confirmations are queued in the database and retried automatically if Resend is unavailable. Paid-registration emails include a PDF receipt attachment and a secure receipt download link. Configure `RESEND_API_KEY` and a verified `EMAIL_FROM` sender after deploying migrations.
+Abstract submission acknowledgments, brochure-request delivery, and verified paid-registration confirmations are queued in the database and retried if SMTP is unavailable. Paid-registration emails include a PDF receipt attachment and a secure receipt download link.
 
 ### 1.4 Hostinger Domain Setup
 
@@ -127,8 +122,12 @@ FRONTEND_URL=https://yourdomain.com,https://www.yourdomain.com
 CLOUDINARY_CLOUD_NAME=your_cloud_name
 CLOUDINARY_API_KEY=your_api_key
 CLOUDINARY_API_SECRET=your_api_secret
-RESEND_API_KEY=re_xxxxxxxxxxxxx
-EMAIL_FROM=noreply@yourdomain.com
+SMTP_HOST=smtp.hostinger.com
+SMTP_PORT=465
+SMTP_SECURE=true
+SMTP_USER=conference@yourdomain.com
+SMTP_PASS=...
+SMTP_FROM=conference@yourdomain.com
 ADMIN_EMAIL=admin@yourdomain.com
 ADMIN_PASSWORD=secure-password
 ADMIN_FIRST_NAME=Admin
@@ -248,11 +247,11 @@ Expected response:
 
 Visit `https://yourdomain.com` in your browser
 
-### 5.3 Test Authentication
+### 5.3 Test Public and Administrator Workflows
 
-1. Try registering a new user
-2. Check email delivery (check Resend logs)
-3. Login with the new account
+1. Submit a public contact or abstract form without signing in.
+2. Verify the configured mailbox receives the relevant notification.
+3. Test login using the provisioned administrator account.
 
 ### 5.4 Test Image Upload
 
@@ -283,7 +282,7 @@ Visit `https://yourdomain.com` in your browser
 - **Backend API**: Logs, health checks, and request monitoring
 - **MySQL**: Database query metrics and backups
 - **Cloudinary**: Storage usage and request logs
-- **Resend**: Email delivery logs and metrics
+- **Hostinger Email**: Mailbox usage, sending limits, and delivery diagnostics
 
 ### Scaling Considerations
 
@@ -295,7 +294,7 @@ Visit `https://yourdomain.com` in your browser
 | MySQL | local or managed | ✅ |
 | Vercel | 100GB bandwidth/month | Usually won't hit |
 | Cloudinary | 25GB storage | Upgrade plan |
-| Resend | 100 emails/day | Upgrade plan |
+| Hostinger Email | Depends on mailbox plan | Follow Hostinger sending limits |
 
 ---
 
@@ -318,9 +317,9 @@ Visit `https://yourdomain.com` in your browser
 
 ### Issue: Emails not sending
 ```
-- Verify RESEND_API_KEY is correct
-- Check EMAIL_FROM matches verified sender
-- Check Resend dashboard for delivery logs
+- Verify SMTP_HOST, SMTP_PORT, and SMTP_SECURE match Hostinger's current SMTP settings
+- Verify SMTP_USER, SMTP_PASS, and SMTP_FROM match an active mailbox and permitted sender
+- Check backend logs and Hostinger Email delivery diagnostics
 - Verify email template HTML is valid
 ```
 
@@ -347,7 +346,7 @@ Visit `https://yourdomain.com` in your browser
 - [Vercel Documentation](https://vercel.com/docs)
 - [MySQL Documentation](https://dev.mysql.com/doc/)
 - [Cloudinary Documentation](https://cloudinary.com/documentation)
-- [Resend Documentation](https://resend.com/docs)
+- [Hostinger Email documentation](https://www.hostinger.com/help/category/email)
 - [NestJS Deployment](https://docs.nestjs.com/deployment)
 - [Next.js Deployment](https://nextjs.org/docs/deployment)
 

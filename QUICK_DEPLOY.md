@@ -6,7 +6,7 @@ This guide helps you get your application live in ~30 minutes.
 
 1. GitHub account with your code pushed
 2. MySQL database ready locally or via a managed provider
-3. Accounts created on: Render, Vercel, Cloudinary, Resend, Hostinger
+3. Hosting, Cloudinary, and Hostinger Email are set up
 
 ---
 
@@ -24,12 +24,11 @@ This guide helps you get your application live in ~30 minutes.
 2. Dashboard → Copy Cloud Name, API Key, API Secret
 3. Store all three
 
-### Resend
+### Hostinger SMTP
 
-1. [Create free account](https://resend.com)
-2. API Keys → Create key
-3. Add domain to verified senders
-4. Store `RESEND_API_KEY`
+1. Create a conference mailbox in Hostinger Email.
+2. Use Hostinger SMTP settings (`smtp.hostinger.com`, port `465`, SSL enabled).
+3. Set the SMTP variables in the backend host environment only. Do not put credentials in frontend variables.
 
 ---
 
@@ -55,8 +54,12 @@ This guide helps you get your application live in ~30 minutes.
    CLOUDINARY_CLOUD_NAME=your_name
    CLOUDINARY_API_KEY=your_key
    CLOUDINARY_API_SECRET=your_secret
-   RESEND_API_KEY=re_xxxxx
-   EMAIL_FROM=noreply@yourdomain.com
+   SMTP_HOST=smtp.hostinger.com
+   SMTP_PORT=465
+   SMTP_SECURE=true
+   SMTP_USER=conference@yourdomain.com
+   SMTP_PASS=...
+   SMTP_FROM=conference@yourdomain.com
    NODE_ENV=production
    API_PORT=3001
    ```
@@ -117,11 +120,11 @@ curl https://api.yourdomain.com/health
 # Frontend
 Visit https://yourdomain.com in browser
 
-# Try registering
-Go to /registration and complete registration
+# Submit a public registration
+Go to /registration and complete checkout without creating an attendee account
 
 # Check email
-Look for confirmation email in your inbox
+Look for the payment confirmation email after verified payment
 ```
 
 ---

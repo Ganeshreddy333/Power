@@ -7,7 +7,7 @@ This application is configured for **cloud-first deployment** on free-tier servi
 - `frontend/`: Next.js UI (Vercel)
 - `database/`: MySQL database
 - `storage/`: Cloudinary
-- `email/`: Resend
+- `email/`: Hostinger SMTP via Nodemailer
 
 ---
 
@@ -25,7 +25,7 @@ See [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) for complete step-by-step instr
 
 ✅ **Prisma ORM** - Configured for MySQL
 ✅ **Cloudinary Integration** - Image storage (replaces local storage)
-✅ **Resend Integration** - Transactional email service
+✅ **Centralized SMTP Integration** - Transactional email service
 ✅ **Environment Variables** - .env.example files with all required keys
 ✅ **Vercel Config** - vercel.json for frontend deployment
 ✅ **Render Config** - render.yaml for backend deployment
@@ -97,7 +97,7 @@ docker compose up --build
 | Backend | Render | Free | Free (with limits) |
 | Database | MySQL | Managed or local | Varies |
 | Storage | Cloudinary | Free | Free* |
-| Email | Resend | Free | Free (limited) |
+| Email | Hostinger SMTP | Hostinger mailbox plan | Per plan |
 | Domain | Hostinger | .com | ~$3/year |
 
 *Free tier has limitations - see [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) for details.
@@ -111,8 +111,12 @@ docker compose up --build
 - `JWT_SECRET` - Random secret for token signing
 - `FRONTEND_URL` - Your domain (for CORS)
 - `CLOUDINARY_*` - Cloudinary credentials
-- `RESEND_API_KEY` - Resend email service key
-- `EMAIL_FROM` - Sender email address
+- `SMTP_HOST` - Hostinger SMTP host (`smtp.hostinger.com`)
+- `SMTP_PORT` - SMTP port (`465` with SSL, or the Hostinger-provided alternative)
+- `SMTP_SECURE` - TLS mode (`true` for port 465)
+- `SMTP_USER` / `SMTP_PASS` - Hostinger mailbox credentials
+- `SMTP_FROM` - Configured sender email address
+- `ADMIN_NOTIFICATION_EMAIL` - Admin inbox for independent workflow notifications
 
 ### Frontend (.env.local / .env.production)
 - `NEXT_PUBLIC_API_URL` - Backend URL
@@ -159,7 +163,7 @@ For platform-specific issues:
 - Vercel: https://vercel.com/docs
 - MySQL: https://dev.mysql.com/doc/
 - Cloudinary: https://cloudinary.com/documentation
-- Resend: https://resend.com/docs
+- Hostinger Email: https://www.hostinger.com/help/category/email
 
 If your Docker install uses the legacy Compose CLI, run:
 

@@ -10,28 +10,10 @@ export class AuthService {
     private readonly usersService: UsersService,
   ) {}
 
-  async register(email: string, password: string, firstName: string, lastName: string) {
-    const existingUser = await this.usersService.findByEmail(email);
-    if (existingUser) {
-      throw new UnauthorizedException('User already exists');
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const user = await this.usersService.create({
-      email,
-      password: hashedPassword,
-      firstName,
-      lastName,
-    });
-
-    return this.generateToken(user);
-  }
-
   async login(email: string, password: string) {
     const user = await this.usersService.findByEmail(email);
 
-    if (!user) {
+    if (!user || user.role !== 'admin') {
       throw new UnauthorizedException('Invalid credentials');
     }
 

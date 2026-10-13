@@ -149,34 +149,56 @@ describe('DataService raw-query behavior', () => {
   });
 
   it('does not send duplicate paid-registration notifications', async () => {
-    const transactionResults = [1, 1, 0];
+    const previousAdminNotificationEmail = process.env.ADMIN_NOTIFICATION_EMAIL;
+    process.env.ADMIN_NOTIFICATION_EMAIL = 'admin@example.test';
+    const transactionResults = [1, 0];
     const prisma = {
       $executeRawUnsafe: jest.fn().mockResolvedValue(1),
-      $queryRawUnsafe: jest.fn().mockResolvedValue([{ id: 'registration-1', payment_status: 'paid' }]),
+      $queryRawUnsafe: jest.fn()
+        .mockResolvedValueOnce([{ id: 'registration-1', email: 'person@example.test', full_name: 'Person', plan_name: 'Speaker' }])
+        .mockResolvedValue([{ id: 'registration-1', payment_status: 'paid' }]),
       $transaction: jest.fn(async (callback) => callback({
         $executeRawUnsafe: jest.fn(async () => transactionResults.shift()),
+        $queryRawUnsafe: jest.fn().mockResolvedValue([{ id: 'registration-1', email: 'person@example.test', full_name: 'Person', plan_name: 'Speaker' }]),
       })),
     };
     const service = new DataService(prisma, undefined, undefined);
-    const notify = jest.spyOn(service, 'sendPaymentSuccessNotification').mockResolvedValue(null);
+    const notify = jest.spyOn(service, 'dispatchQueuedEmailBestEffort').mockResolvedValue(undefined);
     const payload = { p_registration_id: 'registration-1', p_payment_status: 'paid' };
 
-    await service.updateRegistrationPayment(payload);
-    await service.updateRegistrationPayment(payload);
+    try {
+      await service.updateRegistrationPayment(payload);
+      await service.updateRegistrationPayment(payload);
 
-    expect(notify).toHaveBeenCalledTimes(1);
+      expect(notify).toHaveBeenCalledTimes(2);
+      expect(notify).toHaveBeenCalledWith('PAYMENT_CONFIRMED:registration-1', 'PAYMENT_CONFIRMED');
+      expect(notify).toHaveBeenCalledWith('PAYMENT_CONFIRMED:registration-1:ADMIN', 'PAYMENT_CONFIRMED');
+    } finally {
+      if (previousAdminNotificationEmail === undefined) delete process.env.ADMIN_NOTIFICATION_EMAIL;
+      else process.env.ADMIN_NOTIFICATION_EMAIL = previousAdminNotificationEmail;
+    }
   });
 
   it('marks a failed confirmation email retryable without changing payment state', async () => {
-    const prisma = { $executeRawUnsafe: jest.fn().mockResolvedValue(1) };
+    const prisma = {
+      $executeRawUnsafe: jest.fn().mockResolvedValue(1),
+      $queryRawUnsafe: jest.fn().mockResolvedValue([{
+        id: 'notification-1',
+        type: 'PAYMENT_CONFIRMED',
+        recipient: 'person@example.test',
+        recipient_role: 'USER',
+        payload: JSON.stringify({ registrationId: 'registration-1' }),
+        attempts: 1,
+      }]),
+    };
     const service = new DataService(prisma, undefined, undefined);
     jest.spyOn(service, 'sendPaymentSuccessNotification').mockRejectedValue(new Error('email provider timeout'));
 
-    await expect(service.deliverPaymentConfirmation('registration-1')).resolves.toEqual({ success: false, retryable: true });
+    await expect(service.deliverEmailNotification('PAYMENT_CONFIRMED:registration-1')).resolves.toEqual({ success: false, retryable: true });
 
     expect(prisma.$executeRawUnsafe).toHaveBeenCalledTimes(2);
-    expect(prisma.$executeRawUnsafe.mock.calls[1][0]).toContain("status = 'FAILED'");
-    expect(prisma.$executeRawUnsafe.mock.calls[1][1]).toBe('email provider timeout');
+    expect(prisma.$executeRawUnsafe.mock.calls[1][0]).toContain("'PERMANENT_FAILURE' ELSE 'FAILED'");
+    expect(prisma.$executeRawUnsafe.mock.calls[1][1]).toBe('Error');
   });
 
   it('prices each participant from the server-calculated plan price', async () => {
@@ -283,7 +305,7 @@ describe('DataService raw-query behavior', () => {
   });
 
   it('emails the exact order gateway currency and amount', async () => {
-    const emailService = { send: jest.fn().mockResolvedValue({}) };
+    const emailService = { sendPaymentConfirmation: jest.fn().mockResolvedValue({}) };
     const service = new DataService({}, emailService, undefined);
     jest.spyOn(service, 'generateReceipt').mockResolvedValue({
       receiptNumber: 'REC-1',
@@ -293,6 +315,8 @@ describe('DataService raw-query behavior', () => {
       if (table === 'registration_intents') return [{
         id: 'registration-a',
         email: 'buyer@example.test',
+        full_name: 'Test Buyer',
+        payment_status: 'paid',
         payment_provider: 'razorpay',
         currency: 'USD',
         amount_usd: 156.45,
@@ -303,6 +327,7 @@ describe('DataService raw-query behavior', () => {
         registration_id: 'registration-a',
         order_number: 'ORD-1',
         access_token: 'access-token-a',
+        status: 'PAID',
         gateway_amount: 1341000,
         gateway_currency: 'INR',
       }];
@@ -312,19 +337,143 @@ describe('DataService raw-query behavior', () => {
 
     await service.sendPaymentSuccessNotification('registration-a', null);
 
-    expect(emailService.send.mock.calls[0][0].html).toContain('INR 13410.00');
-    expect(emailService.send.mock.calls[0][0].html).toContain('pay-a');
-    expect(emailService.send.mock.calls[0][0].html).toContain('payment=success&amp;order=access-token-a');
-    expect(emailService.send.mock.calls[0][0].attachments).toEqual([
-      { filename: 'receipt-REC-1.pdf', content: 'cGRm' },
-    ]);
-    expect(emailService.send.mock.calls[0][0].html).not.toContain('$156.45');
+    expect(emailService.sendPaymentConfirmation).toHaveBeenCalledWith(
+      'buyer@example.test',
+      expect.objectContaining({
+        amount: 'INR 13410.00',
+        paymentId: 'pay-a',
+        receiptUrl: expect.stringContaining('payment=success&order=access-token-a'),
+      }),
+      [
+        { filename: 'receipt-REC-1.pdf', content: 'cGRm' },
+      ],
+    );
+    expect(emailService.sendPaymentConfirmation.mock.calls[0][1].amount).not.toContain('$156.45');
+  });
+
+  it('notifies the admin about a payment only from the persisted verified provider transaction', async () => {
+    const emailService = { sendAdminEventNotification: jest.fn().mockResolvedValue({}) };
+    const service = new DataService({}, emailService, undefined);
+    jest.spyOn(service, 'list').mockImplementation(async (table) => {
+      if (table === 'registration_intents') return [{
+        id: 'registration-a',
+        email: 'buyer@example.test',
+        full_name: 'Test Buyer',
+        plan_name: 'Speaker',
+        payment_status: 'paid',
+        gateway_response: { orderId: 'order-a' },
+      }];
+      if (table === 'orders') return [{
+        id: 'order-a',
+        registration_id: 'registration-a',
+        order_number: 'ORD-1',
+        provider: 'stripe',
+        provider_order_id: 'provider-order-1',
+        status: 'PAID',
+        quantity: 1,
+        final_amount: 149,
+        currency: 'USD',
+        gateway_amount: 14900,
+        gateway_currency: 'USD',
+        accommodation_option_id: null,
+      }];
+      if (table === 'payments') return [{
+        provider: 'stripe',
+        provider_payment_id: 'payment-1',
+        provider_order_id: 'provider-order-1',
+        status: 'SUCCESS',
+        amount: 149,
+        currency: 'USD',
+        gateway_amount: 14900,
+        gateway_currency: 'USD',
+        created_at: '2026-10-13T10:00:00.000Z',
+      }];
+      return [];
+    });
+
+    await service.sendPaymentAdminNotification('registration-a', 'admin@example.test');
+
+    expect(emailService.sendAdminEventNotification).toHaveBeenCalledWith('admin@example.test', expect.objectContaining({
+      eventType: 'PAYMENT_CONFIRMED',
+      submittedAt: '2026-10-13T10:00:00.000Z',
+      referenceId: 'ORD-1',
+      fields: expect.objectContaining({
+        'Authoritative order amount': 'USD 149.00',
+        'Provider-confirmed charge': 'USD 149.00',
+      }),
+    }));
+
+    jest.spyOn(service, 'list').mockImplementation(async (table) => {
+      if (table === 'registration_intents') return [{
+        id: 'registration-a', payment_status: 'paid', gateway_response: { orderId: 'order-a' },
+      }];
+      if (table === 'orders') return [{
+        id: 'order-a', registration_id: 'registration-a', provider: 'stripe', provider_order_id: 'provider-order-1',
+        status: 'PAID', final_amount: 149, currency: 'USD', gateway_amount: 14900, gateway_currency: 'USD',
+      }];
+      if (table === 'payments') return [{
+        provider: 'stripe', provider_payment_id: 'payment-1', provider_order_id: 'provider-order-1',
+        status: 'SUCCESS', amount: 150, currency: 'USD', gateway_amount: 14900, gateway_currency: 'USD',
+      }];
+      return [];
+    });
+    await expect(service.sendPaymentAdminNotification('registration-a', 'admin@example.test'))
+      .rejects.toThrow('verified successful payment');
+    expect(emailService.sendAdminEventNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('includes the persisted accommodation snapshot in the verified payment confirmation', async () => {
+    const emailService = { sendPaymentConfirmation: jest.fn().mockResolvedValue({}) };
+    const service = new DataService({}, emailService, undefined);
+    jest.spyOn(service, 'generateReceipt').mockResolvedValue({ receiptNumber: 'REC-2', pdfBase64: 'cGRm' });
+    jest.spyOn(service, 'list').mockImplementation(async (table) => {
+      if (table === 'registration_intents') return [{
+        id: 'registration-a', email: 'buyer@example.test', full_name: 'Test Buyer', payment_status: 'paid',
+        payment_provider: 'stripe', currency: 'USD', gateway_response: { orderId: 'order-a' },
+      }];
+      if (table === 'orders') return [{
+        id: 'order-a', registration_id: 'registration-a', order_number: 'ORD-2', status: 'PAID',
+        access_token: 'access-token-a', gateway_amount: 30900, gateway_currency: 'USD',
+        accommodation_option_id: 'room-a', accommodation_name: 'Solar Hotel',
+        accommodation_check_in: '2027-03-02', accommodation_check_out: '2027-03-04',
+        accommodation_nights: 2, accommodation_total: 160,
+      }];
+      if (table === 'payments') return [{ provider_payment_id: 'pay-a', status: 'SUCCESS' }];
+      return [];
+    });
+
+    await service.sendPaymentSuccessNotification('registration-a', null);
+
+    expect(emailService.sendPaymentConfirmation.mock.calls[0][1].accommodation).toEqual({
+      name: 'Solar Hotel',
+      checkIn: '2027-03-02',
+      checkOut: '2027-03-04',
+      nights: 2,
+      total: 'USD 160.00',
+    });
   });
 
   it('queues an abstract submission acknowledgment after saving the submission', async () => {
     const service = new DataService({}, {}, undefined);
-    jest.spyOn(service, 'insert').mockResolvedValue({ id: 'submission-1' });
-    const enqueue = jest.spyOn(service, 'enqueueEmailNotification').mockResolvedValue({ success: true });
+    const persist = jest.spyOn(service, 'persistPublicRecordWithNotification').mockImplementation(async (_table, payload, createNotification) => {
+      const record = { ...payload, id: 'submission-1' };
+      expect(createNotification(record)).toMatchObject({
+        type: 'ABSTRACT_SUBMISSION',
+        dedupeKey: 'ABSTRACT_SUBMISSION:submission-1',
+        recipient: 'ada@example.test',
+        payload: { firstName: 'Ada', abstractTitle: 'Clean Energy Storage', submissionId: 'submission-1' },
+        adminPayload: {
+          eventType: 'ABSTRACT_SUBMISSION',
+          referenceId: 'submission-1',
+          fields: {
+            Name: 'Ada Lovelace',
+            Email: 'ada@example.test',
+            'Abstract title': 'Clean Energy Storage',
+          },
+        },
+      });
+      return { id: 'submission-1' };
+    });
 
     await expect(service.createPublicAbstractSubmission({
       full_name: 'Ada Lovelace',
@@ -333,20 +482,25 @@ describe('DataService raw-query behavior', () => {
       abstract_title: 'Clean Energy Storage',
     })).resolves.toEqual({ id: 'submission-1' });
 
-    expect(enqueue).toHaveBeenCalledWith(
-      'ABSTRACT_SUBMISSION',
-      'ABSTRACT_SUBMISSION:submission-1',
-      'ada@example.test',
-      { firstName: 'Ada', abstractTitle: 'Clean Energy Storage', submissionId: 'submission-1' },
-    );
+    expect(persist).toHaveBeenCalledWith('abstract_submissions', expect.objectContaining({
+      full_name: 'Ada Lovelace', email: 'ada@example.test', abstract_title: 'Clean Energy Storage',
+    }), expect.any(Function));
   });
 
   it('queues a brochure delivery email for brochure download requests only', async () => {
     const previousFrontendUrl = process.env.FRONTEND_URL;
     process.env.FRONTEND_URL = 'https://conference.example.test';
     const service = new DataService({}, {}, undefined);
-    jest.spyOn(service, 'insert').mockResolvedValue({ id: 'contact-1' });
-    const enqueue = jest.spyOn(service, 'enqueueEmailNotification').mockResolvedValue({ success: true });
+    const persist = jest.spyOn(service, 'persistPublicRecordWithNotification').mockImplementation(async (_table, payload, createNotification) => {
+      const record = { ...payload, id: 'contact-1' };
+      expect(createNotification(record)).toMatchObject({
+        type: 'BROCHURE_REQUEST',
+        dedupeKey: 'BROCHURE_REQUEST:contact-1',
+        recipient: 'grace@example.test',
+        payload: { firstName: 'Grace', brochureUrl: 'https://conference.example.test/brochure-2027.pdf' },
+      });
+      return { id: 'contact-1' };
+    });
 
     try {
       await service.createPublicContactMessage({
@@ -360,12 +514,89 @@ describe('DataService raw-query behavior', () => {
       else process.env.FRONTEND_URL = previousFrontendUrl;
     }
 
-    expect(enqueue).toHaveBeenCalledWith(
-      'BROCHURE_REQUEST',
-      'BROCHURE_REQUEST:contact-1',
-      'grace@example.test',
-      { firstName: 'Grace', brochureUrl: 'https://conference.example.test/brochure-2027.pdf' },
-    );
+    expect(persist).toHaveBeenCalledWith('contact_messages', expect.any(Object), expect.any(Function));
+  });
+
+  it('uses the persisted address for contact and registration acknowledgements', async () => {
+    const service = new DataService({}, {}, undefined);
+    const persisted = [];
+    jest.spyOn(service, 'persistPublicRecordWithNotification').mockImplementation(async (table, payload, createNotification) => {
+      const record = { ...payload, id: `${table}-1` };
+      persisted.push(createNotification(record));
+      return record;
+    });
+
+    await service.createPublicContactMessage({
+      name: 'Grace Hopper',
+      email: 'GRACE@EXAMPLE.TEST',
+      subject: 'Conference question',
+      message: 'Please share the schedule.',
+    });
+    jest.spyOn(service, 'resolveRegistrationPlan').mockResolvedValue({ amount: 149, label: 'Speaker' });
+    await service.createPublicRegistration({
+      full_name: 'Ada Lovelace',
+      email: 'ADA@EXAMPLE.TEST',
+      affiliation: 'Analytical Engine Society',
+      country: 'UK',
+      plan_key: 'early-speaker',
+      payment_provider: 'stripe',
+    });
+
+    expect(persisted).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'CONTACT_ACKNOWLEDGEMENT',
+        recipient: 'grace@example.test',
+        payload: expect.objectContaining({ name: 'Grace Hopper', subject: 'Conference question' }),
+      }),
+      expect.objectContaining({
+        type: 'REGISTRATION_RECEIVED',
+        recipient: 'ada@example.test',
+        payload: expect.objectContaining({ firstName: 'Ada', planName: 'Speaker' }),
+      }),
+    ]));
+  });
+
+  it('persists a public record and its notification event in one database transaction', async () => {
+    const transaction = {
+      $executeRawUnsafe: jest.fn().mockResolvedValue(1),
+      $queryRawUnsafe: jest.fn().mockResolvedValue([{
+        id: 'contact-1', name: 'Grace Hopper', email: 'grace@example.test', subject: 'Question',
+      }]),
+    };
+    const prisma = { $transaction: jest.fn(async (callback) => callback(transaction)) };
+    const service = new DataService(prisma, {}, undefined);
+    const dispatch = jest.spyOn(service, 'dispatchQueuedEmailBestEffort').mockResolvedValue(undefined);
+    const previousAdmin = process.env.ADMIN_NOTIFICATION_EMAIL;
+    process.env.ADMIN_NOTIFICATION_EMAIL = 'admin@example.test';
+    try {
+      const saved = await service.persistPublicRecordWithNotification(
+        'contact_messages',
+        { id: 'contact-1', name: 'Grace Hopper', email: 'grace@example.test', subject: 'Question', message: 'Hello' },
+        (record) => ({
+          type: 'CONTACT_ACKNOWLEDGEMENT',
+          dedupeKey: `CONTACT_ACKNOWLEDGEMENT:${record.id}`,
+          recipient: record.email,
+          payload: { name: record.name, subject: record.subject },
+          adminPayload: {
+            eventType: 'CONTACT_ACKNOWLEDGEMENT',
+            submittedAt: '2026-10-13T10:00:00.000Z',
+            referenceId: String(record.id),
+            fields: { Name: String(record.name), Email: String(record.email), Message: 'Hello' },
+          },
+        }),
+      );
+
+      expect(saved.id).toBe('contact-1');
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(transaction.$executeRawUnsafe).toHaveBeenCalledTimes(3);
+      expect(transaction.$executeRawUnsafe.mock.calls[1][0]).toContain('INSERT INTO `email_notifications`');
+      expect(transaction.$executeRawUnsafe.mock.calls[1]).toContain('grace@example.test');
+      expect(transaction.$executeRawUnsafe.mock.calls[2]).toContain('admin@example.test');
+      expect(dispatch).toHaveBeenCalledTimes(2);
+    } finally {
+      if (previousAdmin === undefined) delete process.env.ADMIN_NOTIFICATION_EMAIL;
+      else process.env.ADMIN_NOTIFICATION_EMAIL = previousAdmin;
+    }
   });
 
   it('records email provider failures for retry instead of reporting a successful delivery', async () => {
@@ -376,17 +607,18 @@ describe('DataService raw-query behavior', () => {
         type: 'ABSTRACT_SUBMISSION',
         recipient: 'ada@example.test',
         payload: JSON.stringify({ firstName: 'Ada', abstractTitle: 'Storage', submissionId: 'submission-1' }),
+        attempts: 1,
       }]),
     };
-    const emailService = { sendAbstractSubmissionConfirmation: jest.fn().mockRejectedValue(new Error('Resend unavailable')) };
+    const emailService = { sendAbstractSubmissionConfirmation: jest.fn().mockRejectedValue(new Error('SMTP unavailable')) };
     const service = new DataService(prisma, emailService, undefined);
 
     await expect(service.deliverEmailNotification('ABSTRACT_SUBMISSION:submission-1'))
       .resolves.toEqual({ success: false, retryable: true });
 
     expect(prisma.$executeRawUnsafe.mock.calls[0][0]).toContain("status` = 'SENDING'");
-    expect(prisma.$executeRawUnsafe.mock.calls[1][0]).toContain("status` = 'FAILED'");
-    expect(prisma.$executeRawUnsafe.mock.calls[1][1]).toBe('Resend unavailable');
+    expect(prisma.$executeRawUnsafe.mock.calls[1][0]).toContain("'PERMANENT_FAILURE' ELSE 'FAILED'");
+    expect(prisma.$executeRawUnsafe.mock.calls[1][1]).toBe('Error');
   });
 
   it('sends a queued abstract confirmation and marks its outbox row sent', async () => {
@@ -401,9 +633,10 @@ describe('DataService raw-query behavior', () => {
           abstractTitle: 'Clean Energy Storage',
           submissionId: 'submission-1',
         }),
+        attempts: 1,
       }]),
     };
-    const emailService = { sendAbstractSubmissionConfirmation: jest.fn().mockResolvedValue({ id: 'resend-1' }) };
+    const emailService = { sendAbstractSubmissionConfirmation: jest.fn().mockResolvedValue({ messageId: 'smtp-1' }) };
     const service = new DataService(prisma, emailService, undefined);
 
     await expect(service.deliverEmailNotification('ABSTRACT_SUBMISSION:submission-1'))
@@ -416,6 +649,198 @@ describe('DataService raw-query behavior', () => {
       'submission-1',
     );
     expect(prisma.$executeRawUnsafe.mock.calls[1][0]).toContain("status` = 'SENT'");
+  });
+
+  it.each([
+    ['CONTACT_ACKNOWLEDGEMENT', 'sendContactAcknowledgement', { name: 'Ada', subject: 'Question' }],
+    ['REGISTRATION_RECEIVED', 'sendRegistrationReceived', { firstName: 'Ada', registrationId: 'reg-1', planName: 'Speaker' }],
+    ['ABSTRACT_DECISION', 'sendAbstractDecision', { firstName: 'Ada', abstractTitle: 'Storage', status: 'approved' }],
+    ['PAYMENT_FAILED', 'sendPaymentFailure', { firstName: 'Ada', orderNumber: 'ORD-1' }],
+    ['PAYMENT_CANCELLED', 'sendPaymentCancelled', { firstName: 'Ada', orderNumber: 'ORD-1' }],
+    ['REFUND_CONFIRMED', 'sendRefundConfirmation', { firstName: 'Ada', orderNumber: 'ORD-1', amount: '10.00', currency: 'USD', partial: true }],
+  ])('dispatches persisted %s events through EmailService', async (type, method, payload) => {
+    const prisma = {
+      $executeRawUnsafe: jest.fn().mockResolvedValue(1),
+      $queryRawUnsafe: jest.fn().mockResolvedValue([{
+        id: 'email-1',
+        type,
+        recipient: 'ada@example.test',
+        payload: JSON.stringify(payload),
+        attempts: 1,
+      }]),
+    };
+    const emailService = { [method]: jest.fn().mockResolvedValue({ messageId: 'smtp-1' }) };
+    const service = new DataService(prisma, emailService, undefined);
+
+    await expect(service.deliverEmailNotification(`notification:${type}`))
+      .resolves.toEqual({ success: true, sent: true });
+    expect(emailService[method]).toHaveBeenCalled();
+    expect(prisma.$executeRawUnsafe.mock.calls.at(-1)[0]).toContain("status` = 'SENT'");
+  });
+
+  it('marks a missing notification recipient permanently failed without calling SMTP', async () => {
+    const prisma = {
+      $executeRawUnsafe: jest.fn().mockResolvedValue(1),
+      $queryRawUnsafe: jest.fn().mockResolvedValue([{
+        id: 'email-1', type: 'ABSTRACT_SUBMISSION', recipient: '', payload: '{}', attempts: 1,
+      }]),
+    };
+    const emailService = { sendAbstractSubmissionConfirmation: jest.fn() };
+    const service = new DataService(prisma, emailService, undefined);
+
+    await expect(service.deliverEmailNotification('missing-recipient'))
+      .resolves.toEqual({ success: false, retryable: false });
+    expect(emailService.sendAbstractSubmissionConfirmation).not.toHaveBeenCalled();
+    expect(prisma.$executeRawUnsafe.mock.calls[1][0]).toContain("status` = 'PERMANENT_FAILURE'");
+  });
+
+  it('does not send a notification when its outbox event is already claimed or delivered', async () => {
+    const prisma = {
+      $executeRawUnsafe: jest.fn().mockResolvedValue(0),
+      $queryRawUnsafe: jest.fn(),
+    };
+    const emailService = { sendAbstractSubmissionConfirmation: jest.fn() };
+    const service = new DataService(prisma, emailService, undefined);
+
+    await expect(service.deliverEmailNotification('ABSTRACT_SUBMISSION:submission-1'))
+      .resolves.toEqual({ skipped: true });
+    expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
+    expect(emailService.sendAbstractSubmissionConfirmation).not.toHaveBeenCalled();
+  });
+
+  it('atomically records a payment failure transition and its notification event', async () => {
+    const transaction = {
+      $executeRawUnsafe: jest.fn().mockResolvedValue(1),
+      $queryRawUnsafe: jest.fn().mockResolvedValue([{
+        id: 'order-1',
+        order_number: 'ORD-1',
+        full_name: 'Ada Lovelace',
+        email: 'ada@example.test',
+      }]),
+    };
+    const prisma = { $transaction: jest.fn(async (callback) => callback(transaction)) };
+    const service = new DataService(prisma, {}, undefined);
+    const dispatch = jest.spyOn(service, 'dispatchQueuedEmailBestEffort').mockResolvedValue(undefined);
+
+    await expect(service.transitionOrderWithEmailNotification(
+      'order-1', ['PENDING'], 'FAILED', 'PAYMENT_FAILED', 'provider-event-1',
+    )).resolves.toBe(true);
+
+    expect(transaction.$executeRawUnsafe.mock.calls[0][0]).toContain('UPDATE orders SET status = ?');
+    expect(transaction.$executeRawUnsafe.mock.calls[1][0]).toContain('INSERT INTO `email_notifications`');
+    expect(transaction.$executeRawUnsafe.mock.calls[1]).toContain('ada@example.test');
+    expect(transaction.$executeRawUnsafe.mock.calls[1]).toContain('PAYMENT_FAILED:order-1:provider-event-1');
+    expect(dispatch).toHaveBeenCalledWith('PAYMENT_FAILED:order-1:provider-event-1', 'PAYMENT_FAILED');
+  });
+
+  it('recovers missing email outbox events for persisted successful refunds', async () => {
+    const prisma = {
+      $queryRawUnsafe: jest.fn().mockResolvedValue([{
+        provider: 'stripe',
+        provider_refund_id: 'refund-1',
+        amount_minor: 5000,
+        currency: 'USD',
+        order_id: 'order-1',
+        order_number: 'ORD-1',
+        gateway_amount: 14900,
+        full_name: 'Ada Lovelace',
+        email: 'ada@example.test',
+        total_refunded_minor: 5000,
+      }]),
+      $executeRawUnsafe: jest.fn().mockResolvedValue(1),
+    };
+    const service = new DataService(prisma, {}, undefined);
+
+    await expect(service.recoverSuccessfulRefundNotifications(20)).resolves.toBe(1);
+
+    expect(prisma.$queryRawUnsafe.mock.calls[0][0]).toContain("rf.status = 'SUCCEEDED'");
+    expect(prisma.$executeRawUnsafe.mock.calls[0][0]).toContain('INSERT INTO `email_notifications`');
+    expect(prisma.$executeRawUnsafe.mock.calls[0]).toContain('REFUND_CONFIRMED:stripe:refund-1');
+    expect(JSON.parse(prisma.$executeRawUnsafe.mock.calls[0][6])).toEqual({
+      firstName: 'Ada',
+      orderNumber: 'ORD-1',
+      amount: '50.00',
+      currency: 'USD',
+      partial: true,
+    });
+  });
+
+  it('recovers missing abstract notifications with independent admin delivery', async () => {
+    const previousAdminNotificationEmail = process.env.ADMIN_NOTIFICATION_EMAIL;
+    process.env.ADMIN_NOTIFICATION_EMAIL = 'admin@example.test';
+    const prisma = {
+      $queryRawUnsafe: jest.fn().mockResolvedValue([{
+        id: 'abstract-1',
+        full_name: 'Ada Lovelace',
+        email: 'ada@example.test',
+        phone: '1234567890',
+        affiliation: 'Analytical Engine Institute',
+        country: 'UK',
+        session: 'Energy storage',
+        abstract_title: 'Clean Energy Storage',
+        abstract_text: 'Abstract content',
+        presentation_type: 'Oral',
+        keywords: 'storage, energy',
+        supporting_text: '',
+        drive_url: '',
+        website_url: '',
+        status: 'pending',
+        created_at: '2026-10-13T10:00:00.000Z',
+      }]),
+    };
+    const service = new DataService(prisma, undefined, undefined);
+    const insert = jest.spyOn(service, 'insertEmailNotification').mockResolvedValue(undefined);
+
+    try {
+      await expect(service.recoverMissingAbstractNotifications(20)).resolves.toBe(1);
+
+      expect(prisma.$queryRawUnsafe.mock.calls[0][0]).toContain("CONCAT('ABSTRACT_SUBMISSION:', s.id, ':ADMIN')");
+      expect(insert).toHaveBeenCalledTimes(1);
+      expect(insert.mock.calls[0][0]).toMatchObject({
+        dedupeKey: 'ABSTRACT_SUBMISSION:abstract-1:ADMIN',
+        recipientRole: 'ADMIN',
+        recipient: 'admin@example.test',
+        payload: {
+          eventType: 'ABSTRACT_SUBMISSION',
+          referenceId: 'abstract-1',
+          fields: {
+            Name: 'Ada Lovelace',
+            Email: 'ada@example.test',
+            'Abstract title': 'Clean Energy Storage',
+          },
+        },
+      });
+    } finally {
+      if (previousAdminNotificationEmail === undefined) delete process.env.ADMIN_NOTIFICATION_EMAIL;
+      else process.env.ADMIN_NOTIFICATION_EMAIL = previousAdminNotificationEmail;
+    }
+  });
+
+  it('queues an abstract decision only when the persisted review state changes', async () => {
+    const existing = {
+      id: 'abstract-1', full_name: 'Ada Lovelace', email: 'ada@example.test',
+      abstract_title: 'Storage', status: 'pending',
+    };
+    const transaction = {
+      $executeRawUnsafe: jest.fn().mockResolvedValue(1),
+      $queryRawUnsafe: jest.fn()
+        .mockResolvedValueOnce([existing])
+        .mockResolvedValueOnce([{ ...existing, status: 'approved' }]),
+    };
+    const prisma = { $transaction: jest.fn(async (callback) => callback(transaction)) };
+    const service = new DataService(prisma, {}, undefined);
+    const dispatch = jest.spyOn(service, 'dispatchQueuedEmailBestEffort').mockResolvedValue(undefined);
+
+    const updated = await service.updateAbstractSubmission('abstract-1', { status: 'approved' });
+
+    expect(updated.status).toBe('approved');
+    expect(transaction.$executeRawUnsafe).toHaveBeenCalledTimes(3);
+    expect(transaction.$executeRawUnsafe.mock.calls[1][0]).toContain('INSERT INTO `email_notifications`');
+    expect(transaction.$executeRawUnsafe.mock.calls[1]).toContain('ABSTRACT_DECISION');
+    expect(transaction.$executeRawUnsafe.mock.calls[1]).toContain('ada@example.test');
+    expect(transaction.$executeRawUnsafe.mock.calls[2][0]).toContain('INSERT INTO `email_notifications`');
+    expect(transaction.$executeRawUnsafe.mock.calls[2]).toContain('ABSTRACT_DECISION');
+    expect(dispatch).toHaveBeenCalledWith(expect.stringMatching(/^ABSTRACT_DECISION:abstract-1:/), 'ABSTRACT_DECISION');
   });
 
   it('requires an exact paid order for receipt generation instead of picking the latest order', async () => {
@@ -471,7 +896,7 @@ describe('DataService raw-query behavior', () => {
   it('persists the validated quantity and matching total on registration', async () => {
     const service = new DataService({}, undefined, undefined);
     jest.spyOn(service, 'resolveRegistrationPlan').mockResolvedValue({ amount: 149, label: 'Speaker' });
-    jest.spyOn(service, 'insert').mockImplementation(async (_table, payload) => payload);
+    jest.spyOn(service, 'persistPublicRecordWithNotification').mockImplementation(async (_table, payload) => payload);
 
     const registration = await service.createPublicRegistration({
       full_name: 'Test User',
@@ -519,7 +944,7 @@ describe('DataService raw-query behavior', () => {
   it('preserves optional registration phone numbers for existing checkout clients', async () => {
     const service = new DataService({}, undefined, undefined);
     jest.spyOn(service, 'resolveRegistrationPlan').mockResolvedValue({ amount: 149, label: 'Speaker' });
-    jest.spyOn(service, 'insert').mockImplementation(async (_table, payload) => payload);
+    jest.spyOn(service, 'persistPublicRecordWithNotification').mockImplementation(async (_table, payload) => payload);
 
     const registration = await service.createPublicRegistration({
       full_name: 'Test User',
@@ -605,5 +1030,152 @@ describe('DataService raw-query behavior', () => {
     const rows = await service.list('registration_intents', { email: 'test@example.com' });
     expect(rows).toEqual([record]);
     expect(prisma.$executeRawUnsafe).toHaveBeenCalledTimes(1);
+  });
+
+  it('queues separate user and admin notifications with stable recipient-specific dedupe keys', () => {
+    const previousAdmin = process.env.ADMIN_NOTIFICATION_EMAIL;
+    process.env.ADMIN_NOTIFICATION_EMAIL = 'admin@example.test';
+    try {
+      const service = new DataService({}, undefined, undefined);
+      const user = {
+        type: 'CONTACT_ACKNOWLEDGEMENT',
+        dedupeKey: 'CONTACT_ACKNOWLEDGEMENT:contact-1',
+        recipient: 'user@example.test',
+        payload: { name: 'User' },
+      };
+      const adminDetails = {
+        eventType: 'CONTACT_ACKNOWLEDGEMENT',
+        submittedAt: '2026-10-13T10:00:00.000Z',
+        referenceId: 'contact-1',
+        fields: { Name: 'User', Message: 'Help' },
+      };
+
+      const first = service.notificationPair(user, adminDetails);
+      const duplicate = service.notificationPair(user, adminDetails);
+
+      expect(first.map((notification) => [notification.recipientRole || 'USER', notification.dedupeKey])).toEqual([
+        ['USER', 'CONTACT_ACKNOWLEDGEMENT:contact-1'],
+        ['ADMIN', 'CONTACT_ACKNOWLEDGEMENT:contact-1:ADMIN'],
+      ]);
+      expect(duplicate.map((notification) => notification.dedupeKey)).toEqual(first.map((notification) => notification.dedupeKey));
+      expect(first[1].recipient).toBe('admin@example.test');
+    } finally {
+      if (previousAdmin === undefined) delete process.env.ADMIN_NOTIFICATION_EMAIL;
+      else process.env.ADMIN_NOTIFICATION_EMAIL = previousAdmin;
+    }
+  });
+
+  it('still queues the admin copy when the persisted user recipient is invalid', () => {
+    const previousAdmin = process.env.ADMIN_NOTIFICATION_EMAIL;
+    process.env.ADMIN_NOTIFICATION_EMAIL = 'admin@example.test';
+    try {
+      const service = new DataService({}, undefined, undefined);
+      const paired = service.notificationPair({
+        type: 'PAYMENT_FAILED',
+        dedupeKey: 'PAYMENT_FAILED:order-1',
+        recipient: '',
+        payload: {},
+      }, {
+        eventType: 'PAYMENT_FAILED',
+        submittedAt: '2026-10-13T10:00:00.000Z',
+        referenceId: 'order-1',
+        fields: { Status: 'FAILED' },
+      });
+
+      expect(paired).toHaveLength(2);
+      expect(paired[0].recipient).toBe('');
+      expect(paired[1].recipientRole).toBe('ADMIN');
+    } finally {
+      if (previousAdmin === undefined) delete process.env.ADMIN_NOTIFICATION_EMAIL;
+      else process.env.ADMIN_NOTIFICATION_EMAIL = previousAdmin;
+    }
+  });
+
+  it('retains an admin notification until ADMIN_NOTIFICATION_EMAIL is configured', async () => {
+    const previousAdmin = process.env.ADMIN_NOTIFICATION_EMAIL;
+    delete process.env.ADMIN_NOTIFICATION_EMAIL;
+    const prisma = {
+      $executeRawUnsafe: jest.fn().mockResolvedValue(1),
+      $queryRawUnsafe: jest.fn().mockResolvedValue([]),
+    };
+    const service = new DataService(prisma, undefined, undefined);
+    const paired = service.notificationPair({
+      type: 'CONTACT_ACKNOWLEDGEMENT',
+      dedupeKey: 'CONTACT_ACKNOWLEDGEMENT:contact-2',
+      recipient: 'user@example.test',
+      payload: {},
+    }, {
+      eventType: 'CONTACT_ACKNOWLEDGEMENT',
+      submittedAt: '2026-10-13T10:00:00.000Z',
+      referenceId: 'contact-2',
+      fields: { Name: 'User' },
+    });
+
+    try {
+      await service.insertEmailNotification(paired[1]);
+      expect(prisma.$executeRawUnsafe.mock.calls[0][0]).toContain("'FAILED'");
+      expect(prisma.$executeRawUnsafe.mock.calls[0]).toContain('ADMIN_NOTIFICATION_EMAIL_UNAVAILABLE');
+
+      process.env.ADMIN_NOTIFICATION_EMAIL = 'admin@example.test';
+      await service.retryFailedEmailNotifications();
+
+      expect(prisma.$executeRawUnsafe.mock.calls[1][0]).toContain("`recipient_role` = 'ADMIN'");
+      expect(prisma.$executeRawUnsafe.mock.calls[1]).toContain('admin@example.test');
+    } finally {
+      if (previousAdmin === undefined) delete process.env.ADMIN_NOTIFICATION_EMAIL;
+      else process.env.ADMIN_NOTIFICATION_EMAIL = previousAdmin;
+    }
+  });
+
+  it('retries a failed user delivery independently from an already deliverable admin copy', async () => {
+    const prisma = {
+      $executeRawUnsafe: jest.fn().mockResolvedValue(1),
+      $queryRawUnsafe: jest.fn(async (_query, key) => [{
+        id: key,
+        type: 'BROCHURE_REQUEST',
+        recipient: key.endsWith(':ADMIN') ? 'admin@example.test' : 'user@example.test',
+        recipient_role: key.endsWith(':ADMIN') ? 'ADMIN' : 'USER',
+        payload: JSON.stringify(key.endsWith(':ADMIN')
+          ? { eventType: 'BROCHURE_REQUEST', submittedAt: '2026-10-13T10:00:00.000Z', referenceId: 'contact-1', fields: { Name: 'Person' } }
+          : { firstName: 'Person', brochureUrl: 'https://example.test/brochure.pdf' }),
+        attempts: 1,
+      }]),
+    };
+    const emailService = {
+      sendBrochureRequestConfirmation: jest.fn().mockRejectedValue(new Error('temporary SMTP failure')),
+      sendAdminEventNotification: jest.fn().mockResolvedValue({ messageId: 'admin-message' }),
+    };
+    const service = new DataService(prisma, emailService, undefined);
+
+    await expect(service.deliverEmailNotification('BROCHURE_REQUEST:contact-1'))
+      .resolves.toEqual({ success: false, retryable: true });
+    await expect(service.deliverEmailNotification('BROCHURE_REQUEST:contact-1:ADMIN'))
+      .resolves.toEqual({ success: true, sent: true });
+
+    expect(emailService.sendBrochureRequestConfirmation).toHaveBeenCalledTimes(1);
+    expect(emailService.sendAdminEventNotification).toHaveBeenCalledTimes(1);
+    expect(prisma.$executeRawUnsafe.mock.calls[1][0]).toContain("ELSE 'FAILED'");
+    expect(prisma.$executeRawUnsafe.mock.calls[3][0]).toContain("SET `status` = 'SENT'");
+  });
+
+  it('marks a missing persisted recipient permanently failed without calling SMTP', async () => {
+    const prisma = {
+      $executeRawUnsafe: jest.fn().mockResolvedValue(1),
+      $queryRawUnsafe: jest.fn().mockResolvedValue([{
+        id: 'notification-1',
+        type: 'CONTACT_ACKNOWLEDGEMENT',
+        recipient: '',
+        recipient_role: 'USER',
+        payload: '{}',
+        attempts: 1,
+      }]),
+    };
+    const emailService = { sendContactAcknowledgement: jest.fn() };
+    const service = new DataService(prisma, emailService, undefined);
+
+    await expect(service.deliverEmailNotification('CONTACT_ACKNOWLEDGEMENT:contact-1'))
+      .resolves.toEqual({ success: false, retryable: false });
+    expect(prisma.$executeRawUnsafe.mock.calls[1][0]).toContain("'PERMANENT_FAILURE'");
+    expect(emailService.sendContactAcknowledgement).not.toHaveBeenCalled();
   });
 });

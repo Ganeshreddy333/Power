@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, Injectable, Logger, NotFoundExc
 import { randomUUID, createHmac, timingSafeEqual } from 'crypto';
 import PDFDocument from 'pdfkit';
 import { PrismaService } from '../database/prisma.service';
-import { EmailService, escapeHtml } from '../email/email.service';
+import { EmailService, isEmailAddress, type AdminNotificationDetails } from '../email/email.service';
 import { CloudinaryService } from '../storage/cloudinary.service';
 
 type Sort = { column: string; ascending?: boolean };
@@ -11,6 +11,31 @@ type TableConfig = {
   columns: string[];
   writable: string[];
   defaultOrder?: Sort[];
+};
+
+type EmailNotificationType =
+  | 'ABSTRACT_SUBMISSION'
+  | 'BROCHURE_REQUEST'
+  | 'CONTACT_ACKNOWLEDGEMENT'
+  | 'REGISTRATION_RECEIVED'
+  | 'PAYMENT_CONFIRMED'
+  | 'ABSTRACT_DECISION'
+  | 'PAYMENT_FAILED'
+  | 'PAYMENT_CANCELLED'
+  | 'REFUND_CONFIRMED';
+
+type EmailNotification = {
+  type: EmailNotificationType;
+  dedupeKey: string;
+  recipient: string;
+  payload: Record<string, unknown>;
+  recipientRole?: 'USER' | 'ADMIN';
+  adminPayload?: Record<string, unknown>;
+};
+
+type RawExecutor = {
+  $executeRawUnsafe: (...args: any[]) => Promise<any>;
+  $queryRawUnsafe: (...args: any[]) => Promise<any>;
 };
 
 const TABLES: Record<string, TableConfig> = {
@@ -393,6 +418,146 @@ export class DataService {
     return value === true || value === 1 || value === '1' || value === 'true';
   }
 
+  private async persistPublicRecordWithNotification(
+    table: 'contact_messages' | 'abstract_submissions' | 'registration_intents',
+    payload: Record<string, unknown>,
+    createNotification: (record: Record<string, any>) => EmailNotification,
+  ) {
+    const config = this.getTable(table);
+    const data = this.pickWritable(table, payload, true);
+    if (!data.id) data.id = randomUUID();
+    const columns = Object.keys(data);
+    if (!columns.length) throw new BadRequestException('No writable fields provided');
+    let notifications: EmailNotification[] = [];
+
+    const record = await (this.prisma as any).$transaction(async (transaction: RawExecutor) => {
+      await transaction.$executeRawUnsafe(
+        `INSERT INTO \`${table}\` (${columns.map((column) => `\`${column}\``).join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`,
+        ...columns.map((column) => this.normalizeValue(data[column])),
+      );
+      const rows = await transaction.$queryRawUnsafe(
+        `SELECT ${config.columns.map((column) => `\`${column}\``).join(', ')} FROM \`${table}\` WHERE \`id\` = ?`,
+        data.id,
+      );
+      const saved = this.jsonSafe(rows)[0] as Record<string, any> | undefined;
+      if (!saved) throw new ServiceUnavailableException(`Saved ${table} record could not be loaded`);
+
+      const notification = createNotification(saved);
+      const adminDetails = notification.adminPayload;
+      notifications = this.notificationPair(notification, adminDetails);
+      for (const item of notifications) {
+        if (isEmailAddress(item.recipient) || item.recipientRole === 'ADMIN') {
+          await this.insertEmailNotification(item, transaction);
+        } else {
+          this.logger.warn(JSON.stringify({
+            event: 'email.notification.skipped',
+            type: item.type,
+            recipientRole: item.recipientRole || 'USER',
+            reason: 'invalid_or_missing_recipient',
+          }));
+        }
+      }
+      if (!isEmailAddress(notification.recipient) && notifications.length === 0) {
+        this.logger.warn(JSON.stringify({
+          event: 'email.notification.skipped',
+          type: notification.type,
+          reason: 'invalid_or_missing_recipient',
+        }));
+      }
+      return saved;
+    });
+
+    for (const notification of notifications) {
+      if (isEmailAddress(notification.recipient)) {
+        await this.dispatchQueuedEmailBestEffort(notification.dedupeKey, notification.type);
+      }
+    }
+    return record;
+  }
+
+  private notificationPair(userNotification: EmailNotification, adminPayload?: Record<string, unknown>) {
+    const notifications = [userNotification];
+    const adminRecipient = String(process.env.ADMIN_NOTIFICATION_EMAIL || '').trim();
+    if (adminPayload && !isEmailAddress(adminRecipient)) {
+      this.logger.error(JSON.stringify({
+        event: 'email.admin_notification.unavailable',
+        type: userNotification.type,
+        reason: 'ADMIN_NOTIFICATION_EMAIL is missing or invalid',
+      }));
+    }
+    if (adminPayload) {
+      notifications.push({
+        type: userNotification.type,
+        dedupeKey: `${userNotification.dedupeKey}:ADMIN`,
+        recipient: isEmailAddress(adminRecipient) ? adminRecipient : '',
+        recipientRole: 'ADMIN',
+        payload: adminPayload,
+      });
+    }
+    return notifications;
+  }
+
+  private async insertEmailNotification(notification: EmailNotification, executor: RawExecutor = this.prisma as any) {
+    const configuredAdmin = notification.recipientRole === 'ADMIN' && isEmailAddress(notification.recipient);
+    const initialStatus = notification.recipientRole === 'ADMIN' && !configuredAdmin ? 'FAILED' : 'PENDING';
+    await executor.$executeRawUnsafe(
+      `INSERT INTO \`email_notifications\` (\`id\`, \`dedupe_key\`, \`type\`, \`recipient\`, \`recipient_role\`, \`payload\`, \`status\`, \`attempts\`, \`last_error\`, \`next_attempt_at\`)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, IF(? = 'FAILED', DATE_ADD(NOW(3), INTERVAL 5 MINUTE), NOW(3)))
+       ON DUPLICATE KEY UPDATE \`dedupe_key\` = VALUES(\`dedupe_key\`)`,
+      randomUUID(),
+      notification.dedupeKey,
+      notification.type,
+      notification.recipient,
+      notification.recipientRole || 'USER',
+      JSON.stringify(notification.payload),
+      initialStatus,
+      initialStatus === 'FAILED' ? 'ADMIN_NOTIFICATION_EMAIL_UNAVAILABLE' : null,
+      initialStatus,
+    );
+  }
+
+  private async dispatchQueuedEmailBestEffort(dedupeKey: string, type: EmailNotificationType) {
+    try {
+      await this.deliverEmailNotification(dedupeKey);
+    } catch (error) {
+      this.logger.error(JSON.stringify({
+        event: 'email.notification.dispatch_error',
+        type,
+        errorCategory: this.emailErrorCategory(error),
+      }));
+    }
+  }
+
+  private emailErrorCategory(error: unknown) {
+    if (error && typeof error === 'object' && 'code' in error) {
+      const code = String(error.code);
+      return /^[A-Z0-9_]{1,64}$/.test(code) ? code : 'SMTP_ERROR';
+    }
+    return error instanceof Error ? error.name : 'UNKNOWN_ERROR';
+  }
+
+  private toAdminNotificationDetails(payload: Record<string, unknown>): AdminNotificationDetails {
+    const fields = payload.fields;
+    if (
+      typeof payload.eventType !== 'string' ||
+      typeof payload.submittedAt !== 'string' ||
+      typeof payload.referenceId !== 'string' ||
+      !fields ||
+      typeof fields !== 'object' ||
+      Array.isArray(fields)
+    ) {
+      throw new BadRequestException('Admin email notification data is invalid');
+    }
+    return {
+      eventType: payload.eventType,
+      submittedAt: payload.submittedAt,
+      referenceId: payload.referenceId,
+      fields: Object.fromEntries(
+        Object.entries(fields).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+      ),
+    };
+  }
+
   async createPublicRegistration(payload: Record<string, unknown>) {
     const fullName = String(payload.full_name || '').trim();
     const email = String(payload.email || '').trim().toLowerCase();
@@ -424,7 +589,7 @@ export class DataService {
     } else if (accommodationCheckIn || accommodationCheckOut) {
       throw new BadRequestException('Select an accommodation option before providing stay dates');
     }
-    return this.insert('registration_intents', {
+    return this.persistPublicRecordWithNotification('registration_intents', {
       full_name: fullName,
       email,
       phone: phone || whatsapp || 'Not provided',
@@ -444,7 +609,35 @@ export class DataService {
       payment_status: 'pending',
       status: 'initiated',
       notes: String(payload.notes || '').slice(0, 4000),
-    });
+    }, (record) => ({
+      type: 'REGISTRATION_RECEIVED',
+      dedupeKey: `REGISTRATION_RECEIVED:${String(record.id)}`,
+      recipient: String(record.email || ''),
+      payload: {
+        firstName: String(record.full_name || '').split(/\s+/)[0],
+        registrationId: String(record.id),
+        planName: String(record.plan_name || record.plan_key || ''),
+      },
+      adminPayload: {
+        eventType: 'REGISTRATION_RECEIVED',
+        submittedAt: String(record.created_at || new Date().toISOString()),
+        referenceId: String(record.id),
+        fields: {
+          Name: String(record.full_name || ''),
+          Email: String(record.email || ''),
+          Phone: String(record.phone || ''),
+          Organization: String(record.affiliation || ''),
+          Country: String(record.country || ''),
+          Designation: String(record.designation || ''),
+          Registration: String(record.plan_name || record.plan_key || ''),
+          Quantity: String(record.quantity || ''),
+          'Calculated amount': `${String(record.currency || 'USD')} ${Number(record.amount_usd || 0).toFixed(2)}`,
+          'Accommodation option': String(record.accommodation_option_id || ''),
+          'Check-in': String(record.accommodation_check_in || ''),
+          'Check-out': String(record.accommodation_check_out || ''),
+        },
+      },
+    }));
   }
 
   async createPublicContactMessage(payload: Record<string, unknown>) {
@@ -455,15 +648,33 @@ export class DataService {
     if (!name || !/^\S+@\S+\.\S+$/.test(email) || !message) throw new BadRequestException('Name, email, and message are required');
     if (phone && !/^\d{10}$/.test(phone)) throw new BadRequestException('A valid 10-digit phone number is required');
     const subject = String(payload.subject || '').trim().slice(0, 255);
-    const created = await this.insert('contact_messages', { name, email, subject, message: message.slice(0, 10000), status: 'new' }) as Record<string, unknown>;
-    if (subject.toLowerCase() === 'brochure download request') {
-      const frontendUrl = String(process.env.FRONTEND_URL || 'http://localhost:3000').split(',')[0].trim().replace(/\/$/, '');
-      await this.enqueueEmailNotification('BROCHURE_REQUEST', `BROCHURE_REQUEST:${String(created.id)}`, email, {
-        firstName: name.split(/\s+/)[0],
-        brochureUrl: `${frontendUrl}/brochure-2027.pdf`,
-      });
-    }
-    return created;
+    const isBrochureRequest = subject.toLowerCase() === 'brochure download request';
+    const frontendUrl = String(process.env.FRONTEND_URL || 'http://localhost:3000').split(',')[0].trim().replace(/\/$/, '');
+    return this.persistPublicRecordWithNotification('contact_messages', {
+      name,
+      email,
+      subject,
+      message: message.slice(0, 10000),
+      status: 'new',
+    }, (record) => ({
+      type: isBrochureRequest ? 'BROCHURE_REQUEST' : 'CONTACT_ACKNOWLEDGEMENT',
+      dedupeKey: `${isBrochureRequest ? 'BROCHURE_REQUEST' : 'CONTACT_ACKNOWLEDGEMENT'}:${String(record.id)}`,
+      recipient: String(record.email || ''),
+      payload: isBrochureRequest
+        ? { firstName: String(record.name || '').split(/\s+/)[0], brochureUrl: `${frontendUrl}/brochure-2027.pdf` }
+        : { name: String(record.name || ''), subject: String(record.subject || '') },
+      adminPayload: {
+        eventType: isBrochureRequest ? 'BROCHURE_REQUEST' : 'CONTACT_ACKNOWLEDGEMENT',
+        submittedAt: String(record.created_at || new Date().toISOString()),
+        referenceId: String(record.id),
+        fields: {
+          Name: String(record.name || ''),
+          Email: String(record.email || ''),
+          Subject: String(record.subject || ''),
+          Message: String(record.message || ''),
+        },
+      },
+    }));
   }
 
   async createPublicAbstractSubmission(payload: Record<string, unknown>) {
@@ -475,33 +686,319 @@ export class DataService {
     if (!/^\d{10}$/.test(phone)) throw new BadRequestException('A valid 10-digit phone number is required');
     const allowed = TABLES.abstract_submissions.writable;
     const cleaned = Object.fromEntries(Object.entries(payload).filter(([key]) => allowed.includes(key)));
-    const created = await this.insert('abstract_submissions', {
+    return this.persistPublicRecordWithNotification('abstract_submissions', {
       ...cleaned,
       full_name: fullName,
       email,
       abstract_title: title,
       status: 'pending',
-    }) as Record<string, unknown>;
-    await this.enqueueEmailNotification('ABSTRACT_SUBMISSION', `ABSTRACT_SUBMISSION:${String(created.id)}`, email, {
-      firstName: fullName.split(/\s+/)[0],
-      abstractTitle: title,
-      submissionId: String(created.id),
-    });
-    return created;
+    }, (record) => ({
+      type: 'ABSTRACT_SUBMISSION',
+      dedupeKey: `ABSTRACT_SUBMISSION:${String(record.id)}`,
+      recipient: String(record.email || ''),
+      payload: {
+        firstName: String(record.full_name || '').split(/\s+/)[0],
+        abstractTitle: String(record.abstract_title || ''),
+        submissionId: String(record.id),
+      },
+      adminPayload: {
+        eventType: 'ABSTRACT_SUBMISSION',
+        submittedAt: String(record.created_at || new Date().toISOString()),
+        referenceId: String(record.id),
+        fields: {
+          Name: String(record.full_name || ''),
+          Email: String(record.email || ''),
+          Phone: String(record.phone || ''),
+          Affiliation: String(record.affiliation || ''),
+          Country: String(record.country || ''),
+          Session: String(record.session || ''),
+          'Abstract title': String(record.abstract_title || ''),
+          'Abstract text': String(record.abstract_text || '').slice(0, 8000),
+          'Presentation type': String(record.presentation_type || ''),
+          Keywords: String(record.keywords || ''),
+          'Supporting text': String(record.supporting_text || '').slice(0, 2000),
+          'Drive URL': String(record.drive_url || ''),
+          'Website URL': String(record.website_url || ''),
+          Status: String(record.status || ''),
+        },
+      },
+    }));
   }
 
-  private async enqueueEmailNotification(type: 'ABSTRACT_SUBMISSION' | 'BROCHURE_REQUEST', dedupeKey: string, recipient: string, payload: Record<string, unknown>) {
-    await (this.prisma as any).$executeRawUnsafe(
-      `INSERT INTO \`email_notifications\` (\`id\`, \`dedupe_key\`, \`type\`, \`recipient\`, \`payload\`, \`status\`, \`attempts\`, \`next_attempt_at\`)
-       VALUES (?, ?, ?, ?, ?, 'PENDING', 0, NOW(3))
-       ON DUPLICATE KEY UPDATE \`dedupe_key\` = VALUES(\`dedupe_key\`)`,
-      randomUUID(),
-      dedupeKey,
-      type,
-      recipient,
-      JSON.stringify(payload),
-    );
-    return this.deliverEmailNotification(dedupeKey);
+  private async enqueueEmailNotification(
+    notification: EmailNotification,
+    adminDetails?: Record<string, unknown>,
+  ) {
+    if (!isEmailAddress(notification.recipient)) {
+      this.logger.warn(JSON.stringify({
+        event: 'email.notification.skipped',
+        type: notification.type,
+        recipientRole: 'USER',
+        reason: 'invalid_or_missing_recipient',
+      }));
+    }
+    const notifications = this.notificationPair(notification, adminDetails);
+    for (const item of notifications) {
+      if (isEmailAddress(item.recipient) || item.recipientRole === 'ADMIN') await this.insertEmailNotification(item);
+    }
+    const results = [];
+    for (const item of notifications) {
+      if (isEmailAddress(item.recipient)) results.push(await this.deliverEmailNotification(item.dedupeKey));
+    }
+    return results;
+  }
+
+  async transitionOrderWithEmailNotification(
+    orderId: string,
+    fromStatuses: string[],
+    toStatus: 'FAILED' | 'CANCELLED',
+    type: 'PAYMENT_FAILED' | 'PAYMENT_CANCELLED',
+    eventId?: string,
+  ) {
+    const expected = [...new Set(fromStatuses.map((status) => status.toUpperCase()))];
+    if (!expected.length) return false;
+    const placeholders = expected.map(() => '?').join(', ');
+    let notifications: EmailNotification[] = [];
+    const transitioned = await (this.prisma as any).$transaction(async (transaction: RawExecutor) => {
+      const affected = await transaction.$executeRawUnsafe(
+        `UPDATE orders SET status = ? WHERE id = ? AND status IN (${placeholders})`,
+        toStatus,
+        orderId,
+        ...expected,
+      );
+      if (Number(affected) !== 1) return false;
+
+      const rows = await transaction.$queryRawUnsafe(
+        `SELECT o.id, o.order_number, o.final_amount, o.currency, o.provider, r.full_name, r.email
+         FROM orders o JOIN registration_intents r ON r.id = o.registration_id
+         WHERE o.id = ? LIMIT 1`,
+        orderId,
+      ) as Array<Record<string, unknown>>;
+      const order = rows[0];
+      if (!order) {
+        this.logger.warn(JSON.stringify({
+          event: 'email.notification.skipped',
+          type,
+          reason: 'persisted_recipient_not_found',
+        }));
+        return true;
+      }
+      if (!isEmailAddress(String(order.email || ''))) {
+        this.logger.warn(JSON.stringify({
+          event: 'email.notification.skipped',
+          type,
+          recipientRole: 'USER',
+          reason: 'invalid_or_missing_recipient',
+        }));
+      }
+
+      const notification: EmailNotification = {
+        type,
+        dedupeKey: `${type}:${orderId}:${eventId || orderId}`,
+        recipient: String(order.email),
+        payload: {
+          firstName: String(order.full_name || '').split(/\s+/)[0],
+          orderNumber: String(order.order_number || order.id),
+        },
+      };
+      notifications = this.notificationPair(notification, {
+        eventType: type,
+        submittedAt: new Date().toISOString(),
+        referenceId: String(order.order_number || order.id),
+        fields: {
+          Name: String(order.full_name || ''),
+          Email: String(order.email || ''),
+          'Order number': String(order.order_number || order.id),
+          Status: toStatus,
+          Provider: String(order.provider || ''),
+          Amount: `${String(order.currency || 'USD')} ${Number(order.final_amount || 0).toFixed(2)}`,
+        },
+      });
+      for (const item of notifications) {
+        if (isEmailAddress(item.recipient) || item.recipientRole === 'ADMIN') await this.insertEmailNotification(item, transaction);
+      }
+      return true;
+    });
+
+    if (transitioned) {
+      for (const notification of notifications) {
+        if (isEmailAddress(notification.recipient)) {
+          await this.dispatchQueuedEmailBestEffort(notification.dedupeKey, notification.type);
+        }
+      }
+    }
+    return transitioned;
+  }
+
+  async queueRefundConfirmationNotification(orderId: string, refundId: string) {
+    try {
+      const order = (await this.list('orders', { id: orderId }) as Record<string, any>[])[0];
+      if (!order) throw new NotFoundException('Notification order was not found');
+      const registration = (await this.list('registration_intents', { id: order.registration_id }) as Record<string, any>[])[0];
+      const recipient = String(registration?.email || '');
+      if (!isEmailAddress(recipient)) {
+        this.logger.warn(JSON.stringify({
+          event: 'email.notification.skipped',
+          type: 'REFUND_CONFIRMED',
+          recipientRole: 'USER',
+          reason: 'invalid_or_missing_recipient',
+        }));
+      }
+      const refund = (await this.list('refunds', {
+        order_id: orderId,
+        provider_refund_id: refundId,
+        status: 'SUCCEEDED',
+      }) as Record<string, any>[])[0];
+      if (!refund) throw new ConflictException('A successful persisted refund is required before notification');
+      const successfulRefunds = (await this.list('refunds', {
+        order_id: orderId,
+        status: 'SUCCEEDED',
+      }) as Record<string, any>[]);
+      const totalRefunded = successfulRefunds.reduce((total, item) => total + Number(item.amount_minor || 0), 0);
+      await this.enqueueEmailNotification({
+        type: 'REFUND_CONFIRMED',
+        dedupeKey: `REFUND_CONFIRMED:${order.provider}:${refundId}`,
+        recipient,
+        payload: {
+          firstName: String(registration.full_name || '').split(/\s+/)[0],
+          orderNumber: String(order.order_number || order.id),
+          amount: (Number(refund.amount_minor) / 100).toFixed(2),
+          currency: String(refund.currency || order.gateway_currency || 'USD'),
+          partial: totalRefunded < Number(order.gateway_amount),
+        },
+      }, {
+        eventType: 'REFUND_CONFIRMED',
+        submittedAt: String(refund.updated_at || new Date().toISOString()),
+        referenceId: String(refundId),
+        fields: {
+          Name: String(registration.full_name || ''),
+          Email: recipient,
+          'Order number': String(order.order_number || order.id),
+          'Refund amount': `${String(refund.currency || order.gateway_currency || 'USD')} ${(Number(refund.amount_minor) / 100).toFixed(2)}`,
+          Status: String(refund.status || ''),
+          Provider: String(order.provider || ''),
+        },
+      });
+    } catch (error) {
+      this.logger.error(JSON.stringify({
+        event: 'email.notification.queue_error',
+        type: 'REFUND_CONFIRMED',
+        errorCategory: this.emailErrorCategory(error),
+      }));
+    }
+  }
+
+  private async recoverSuccessfulRefundNotifications(limit: number) {
+    const rows = await (this.prisma as any).$queryRawUnsafe(
+      `SELECT rf.provider, rf.provider_refund_id, rf.amount_minor, rf.currency, rf.updated_at,
+              o.id AS order_id, o.order_number, o.gateway_amount,
+              r.full_name, r.email,
+              (SELECT SUM(successful.amount_minor) FROM refunds successful
+               WHERE successful.order_id = o.id AND successful.status = 'SUCCEEDED') AS total_refunded_minor
+       FROM refunds rf
+       JOIN orders o ON o.id = rf.order_id
+       JOIN registration_intents r ON r.id = o.registration_id
+       LEFT JOIN email_notifications user_en
+         ON user_en.dedupe_key = CONCAT('REFUND_CONFIRMED:', rf.provider, ':', rf.provider_refund_id)
+       LEFT JOIN email_notifications admin_en
+         ON admin_en.dedupe_key = CONCAT('REFUND_CONFIRMED:', rf.provider, ':', rf.provider_refund_id, ':ADMIN')
+       WHERE rf.status = 'SUCCEEDED' AND (user_en.id IS NULL OR admin_en.id IS NULL)
+       ORDER BY rf.updated_at ASC LIMIT ?`,
+      limit,
+    ) as Array<Record<string, any>>;
+
+    for (const row of rows) {
+      if (!isEmailAddress(String(row.email || ''))) {
+        this.logger.warn(JSON.stringify({
+          event: 'email.notification.skipped',
+          type: 'REFUND_CONFIRMED',
+          recipientRole: 'USER',
+          reason: 'invalid_or_missing_recipient',
+        }));
+      }
+      const userNotification: EmailNotification = {
+        type: 'REFUND_CONFIRMED',
+        dedupeKey: `REFUND_CONFIRMED:${row.provider}:${row.provider_refund_id}`,
+        recipient: String(row.email),
+        payload: {
+          firstName: String(row.full_name || '').split(/\s+/)[0],
+          orderNumber: String(row.order_number || row.order_id),
+          amount: (Number(row.amount_minor) / 100).toFixed(2),
+          currency: String(row.currency || 'USD'),
+          partial: Number(row.total_refunded_minor) < Number(row.gateway_amount),
+        },
+      };
+      const paired = this.notificationPair(userNotification, {
+        eventType: 'REFUND_CONFIRMED',
+        submittedAt: String(row.updated_at || new Date().toISOString()),
+        referenceId: String(row.provider_refund_id),
+        fields: {
+          Name: String(row.full_name || ''),
+          Email: String(row.email || ''),
+          'Order number': String(row.order_number || row.order_id),
+          'Refund amount': `${String(row.currency || 'USD')} ${(Number(row.amount_minor) / 100).toFixed(2)}`,
+          Status: 'SUCCEEDED',
+          Provider: String(row.provider || ''),
+        },
+      });
+      for (const notification of paired) {
+        if (isEmailAddress(notification.recipient) || notification.recipientRole === 'ADMIN') await this.insertEmailNotification(notification);
+      }
+    }
+    return rows.length;
+  }
+
+  private async recoverMissingAbstractNotifications(limit: number) {
+    const rows = await (this.prisma as any).$queryRawUnsafe(
+      `SELECT s.id, s.full_name, s.email, s.phone, s.affiliation, s.country, s.session,
+              s.abstract_title, s.abstract_text, s.presentation_type, s.keywords,
+              s.supporting_text, s.drive_url, s.website_url, s.status, s.created_at
+       FROM abstract_submissions s
+       LEFT JOIN email_notifications admin_en
+         ON admin_en.dedupe_key = CONCAT('ABSTRACT_SUBMISSION:', s.id, ':ADMIN')
+       WHERE admin_en.id IS NULL
+       ORDER BY s.created_at ASC LIMIT ?`,
+      limit,
+    ) as Array<Record<string, any>>;
+
+    for (const row of rows) {
+      const notification: EmailNotification = {
+        type: 'ABSTRACT_SUBMISSION',
+        dedupeKey: `ABSTRACT_SUBMISSION:${String(row.id)}`,
+        recipient: String(row.email || ''),
+        payload: {
+          firstName: String(row.full_name || '').split(/\s+/)[0],
+          abstractTitle: String(row.abstract_title || ''),
+          submissionId: String(row.id),
+        },
+      };
+      const paired = this.notificationPair(notification, {
+        eventType: 'ABSTRACT_SUBMISSION',
+        submittedAt: String(row.created_at || new Date().toISOString()),
+        referenceId: String(row.id),
+        fields: {
+          Name: String(row.full_name || ''),
+          Email: String(row.email || ''),
+          Phone: String(row.phone || ''),
+          Affiliation: String(row.affiliation || ''),
+          Country: String(row.country || ''),
+          Session: String(row.session || ''),
+          'Abstract title': String(row.abstract_title || ''),
+          'Abstract text': String(row.abstract_text || '').slice(0, 8000),
+          'Presentation type': String(row.presentation_type || ''),
+          Keywords: String(row.keywords || ''),
+          'Supporting text': String(row.supporting_text || '').slice(0, 2000),
+          'Drive URL': String(row.drive_url || ''),
+          'Website URL': String(row.website_url || ''),
+          Status: String(row.status || ''),
+        },
+      });
+      const adminNotification = paired.find((item) => item.recipientRole === 'ADMIN');
+      if (adminNotification) {
+        await this.insertEmailNotification(adminNotification);
+      }
+    }
+    return rows.length;
   }
 
   private async deliverEmailNotification(dedupeKey: string) {
@@ -513,7 +1010,7 @@ export class DataService {
     if (Number(claimed) !== 1) return { skipped: true };
 
     const rows = await (this.prisma as any).$queryRawUnsafe(
-      'SELECT `id`, `type`, `recipient`, `payload` FROM `email_notifications` WHERE `dedupe_key` = ? AND `status` = ? LIMIT 1',
+      'SELECT `id`, `type`, `recipient`, `recipient_role`, `payload`, `attempts` FROM `email_notifications` WHERE `dedupe_key` = ? AND `status` = ? LIMIT 1',
       dedupeKey,
       'SENDING',
     ) as Array<Record<string, unknown>>;
@@ -521,10 +1018,36 @@ export class DataService {
     if (!notification) throw new ServiceUnavailableException('Claimed email notification could not be loaded');
 
     try {
+      if (!isEmailAddress(String(notification.recipient || ''))) {
+        await (this.prisma as any).$executeRawUnsafe(
+          "UPDATE `email_notifications` SET `status` = 'PERMANENT_FAILURE', `last_error` = 'INVALID_RECIPIENT', `updated_at` = NOW(3) WHERE `id` = ? AND `status` = 'SENDING'",
+          notification.id,
+        );
+        this.logger.error(JSON.stringify({
+          event: 'email.notification.permanent_failure',
+          type: String(notification.type),
+          reason: 'invalid_or_missing_recipient',
+        }));
+        return { success: false, retryable: false };
+      }
       const payload = typeof notification.payload === 'string'
         ? JSON.parse(notification.payload) as Record<string, unknown>
         : notification.payload as Record<string, unknown>;
-      if (notification.type === 'ABSTRACT_SUBMISSION') {
+      if (String(notification.recipient_role || 'USER') === 'ADMIN') {
+        if (notification.type === 'PAYMENT_CONFIRMED') {
+          await this.sendPaymentAdminNotification(
+            String(payload.registrationId ?? ''),
+            String(notification.recipient),
+          );
+        } else {
+          await this.emailService.sendAdminEventNotification(
+            String(notification.recipient),
+            this.toAdminNotificationDetails(payload),
+          );
+        }
+      } else if (notification.type === 'PAYMENT_CONFIRMED') {
+        await this.sendPaymentSuccessNotification(String(payload.registrationId ?? ''), null);
+      } else if (notification.type === 'ABSTRACT_SUBMISSION') {
         await this.emailService.sendAbstractSubmissionConfirmation(
           String(notification.recipient),
           String(payload.firstName ?? ''),
@@ -537,6 +1060,51 @@ export class DataService {
           String(payload.firstName ?? ''),
           String(payload.brochureUrl ?? ''),
         );
+      } else if (notification.type === 'CONTACT_ACKNOWLEDGEMENT') {
+        await this.emailService.sendContactAcknowledgement(
+          String(notification.recipient),
+          String(payload.name ?? ''),
+          String(payload.subject ?? ''),
+        );
+      } else if (notification.type === 'REGISTRATION_RECEIVED') {
+        await this.emailService.sendRegistrationReceived(
+          String(notification.recipient),
+          String(payload.firstName ?? ''),
+          String(payload.registrationId ?? ''),
+          String(payload.planName ?? ''),
+        );
+      } else if (notification.type === 'ABSTRACT_DECISION') {
+        const status = String(payload.status);
+        if (status !== 'approved' && status !== 'rejected') {
+          throw new BadRequestException('Unsupported abstract decision status');
+        }
+        await this.emailService.sendAbstractDecision(
+          String(notification.recipient),
+          String(payload.firstName ?? ''),
+          String(payload.abstractTitle ?? ''),
+          status,
+        );
+      } else if (notification.type === 'PAYMENT_FAILED') {
+        await this.emailService.sendPaymentFailure(
+          String(notification.recipient),
+          String(payload.firstName ?? ''),
+          String(payload.orderNumber ?? ''),
+        );
+      } else if (notification.type === 'PAYMENT_CANCELLED') {
+        await this.emailService.sendPaymentCancelled(
+          String(notification.recipient),
+          String(payload.firstName ?? ''),
+          String(payload.orderNumber ?? ''),
+        );
+      } else if (notification.type === 'REFUND_CONFIRMED') {
+        await this.emailService.sendRefundConfirmation(
+          String(notification.recipient),
+          String(payload.firstName ?? ''),
+          String(payload.orderNumber ?? ''),
+          String(payload.amount ?? ''),
+          String(payload.currency ?? ''),
+          payload.partial === true,
+        );
       } else {
         throw new BadRequestException(`Unsupported email notification type: ${String(notification.type)}`);
       }
@@ -544,26 +1112,46 @@ export class DataService {
         "UPDATE `email_notifications` SET `status` = 'SENT', `sent_at` = NOW(3), `last_error` = NULL, `updated_at` = NOW(3) WHERE `id` = ? AND `status` = 'SENDING'",
         notification.id,
       );
+      this.logger.log(JSON.stringify({
+        event: 'email.notification.sent',
+        type: String(notification.type),
+        attempt: Number(notification.attempts),
+      }));
       return { success: true, sent: true };
     } catch (error) {
-      const message = (error instanceof Error ? error.message : String(error)).slice(0, 2000);
+      const errorCategory = this.emailErrorCategory(error);
+      const retryable = Number(notification.attempts) < 12;
       await (this.prisma as any).$executeRawUnsafe(
-        "UPDATE `email_notifications` SET `status` = 'FAILED', `last_error` = ?, `next_attempt_at` = DATE_ADD(NOW(3), INTERVAL LEAST(POW(2, `attempts`), 60) MINUTE), `updated_at` = NOW(3) WHERE `id` = ? AND `status` = 'SENDING'",
-        message,
+        "UPDATE `email_notifications` SET `status` = CASE WHEN `attempts` >= 12 THEN 'PERMANENT_FAILURE' ELSE 'FAILED' END, `last_error` = ?, `next_attempt_at` = DATE_ADD(NOW(3), INTERVAL LEAST(POW(2, `attempts`) * (0.8 + RAND() * 0.4), 60) MINUTE), `updated_at` = NOW(3) WHERE `id` = ? AND `status` = 'SENDING'",
+        errorCategory,
         notification.id,
       );
-      this.logger.warn(`Email notification delivery failed for ${dedupeKey}: ${message}`);
-      return { success: false, retryable: true };
+      this.logger.warn(JSON.stringify({
+        event: retryable ? 'email.notification.retry_scheduled' : 'email.notification.permanent_failure',
+        type: String(notification.type),
+        attempt: Number(notification.attempts),
+        errorCategory,
+      }));
+      return { success: false, retryable };
     }
   }
 
   async retryFailedEmailNotifications(limit = 50) {
     const batchSize = Math.min(Math.max(Math.floor(limit), 1), 100);
+    const adminRecipient = String(process.env.ADMIN_NOTIFICATION_EMAIL || '').trim();
+    if (isEmailAddress(adminRecipient)) {
+      await (this.prisma as any).$executeRawUnsafe(
+        "UPDATE `email_notifications` SET `recipient` = ?, `status` = 'PENDING', `last_error` = NULL, `next_attempt_at` = NOW(3), `updated_at` = NOW(3) WHERE `recipient_role` = 'ADMIN' AND `recipient` = '' AND `status` = 'FAILED' AND `last_error` = 'ADMIN_NOTIFICATION_EMAIL_UNAVAILABLE'",
+        adminRecipient,
+      );
+    }
+    await this.recoverMissingAbstractNotifications(batchSize);
+    await this.recoverSuccessfulRefundNotifications(batchSize);
     await (this.prisma as any).$executeRawUnsafe(
       "UPDATE `email_notifications` SET `status` = 'FAILED' WHERE `status` = 'SENDING' AND `updated_at` < DATE_SUB(NOW(3), INTERVAL 10 MINUTE)",
     );
     const rows = await (this.prisma as any).$queryRawUnsafe(
-      "SELECT `dedupe_key` FROM `email_notifications` WHERE `status` IN ('PENDING', 'FAILED') AND `next_attempt_at` <= NOW(3) ORDER BY `next_attempt_at` ASC LIMIT ?",
+      "SELECT `dedupe_key` FROM `email_notifications` WHERE `status` IN ('PENDING', 'FAILED') AND `next_attempt_at` <= NOW(3) AND (`recipient_role` <> 'ADMIN' OR `recipient` <> '') ORDER BY `next_attempt_at` ASC LIMIT ?",
       batchSize,
     ) as Array<{ dedupe_key: string }>;
     const results = [];
@@ -664,6 +1252,85 @@ export class DataService {
     );
     const rows = await this.list(table, { id });
     return (rows as any[])[0] ?? null;
+  }
+
+  async updateAbstractSubmission(id: string, payload: Record<string, unknown>) {
+    const data = this.pickWritable('abstract_submissions', payload);
+    const columns = Object.keys(data);
+    if (!columns.length) throw new BadRequestException('No writable fields provided');
+    const newStatus = data.status === undefined ? undefined : String(data.status).toLowerCase();
+    if (newStatus !== undefined && !['pending', 'approved', 'rejected', 'under_review'].includes(newStatus)) {
+      throw new BadRequestException('Invalid abstract review status');
+    }
+
+    let notifications: EmailNotification[] = [];
+    const updated = await (this.prisma as any).$transaction(async (transaction: RawExecutor) => {
+      const existingRows = await transaction.$queryRawUnsafe(
+        `SELECT ${TABLES.abstract_submissions.columns.map((column) => `\`${column}\``).join(', ')}
+         FROM \`abstract_submissions\` WHERE \`id\` = ? LIMIT 1`,
+        id,
+      );
+      const existing = this.jsonSafe(existingRows)[0] as Record<string, any> | undefined;
+      if (!existing) return null;
+      const oldStatus = String(existing.status || '').toLowerCase();
+      const setClause = columns.map((column) => `\`${column}\` = ?`).join(', ');
+      const affected = await transaction.$executeRawUnsafe(
+        `UPDATE \`abstract_submissions\` SET ${setClause} WHERE \`id\` = ?${newStatus !== undefined ? ' AND LOWER(\`status\`) = ?' : ''}`,
+        ...columns.map((column) => this.normalizeValue(data[column])),
+        id,
+        ...(newStatus !== undefined ? [oldStatus] : []),
+      );
+      if (Number(affected) !== 1 && newStatus !== oldStatus) {
+        throw new ConflictException('Abstract submission changed while it was being updated');
+      }
+      const savedRows = await transaction.$queryRawUnsafe(
+        `SELECT ${TABLES.abstract_submissions.columns.map((column) => `\`${column}\``).join(', ')}
+         FROM \`abstract_submissions\` WHERE \`id\` = ? LIMIT 1`,
+        id,
+      );
+      const saved = this.jsonSafe(savedRows)[0] as Record<string, any> | undefined;
+      if (saved && newStatus && newStatus !== oldStatus && ['approved', 'rejected'].includes(newStatus)) {
+        const recipient = String(saved.email || '');
+        const notification: EmailNotification = {
+          type: 'ABSTRACT_DECISION',
+          dedupeKey: `ABSTRACT_DECISION:${id}:${randomUUID()}`,
+          recipient,
+          payload: {
+            firstName: String(saved.full_name || '').split(/\s+/)[0],
+            abstractTitle: String(saved.abstract_title || ''),
+            status: newStatus,
+          },
+        };
+        notifications = this.notificationPair(notification, {
+          eventType: 'ABSTRACT_DECISION',
+          submittedAt: String(saved.updated_at || new Date().toISOString()),
+          referenceId: String(saved.id),
+          fields: {
+            Name: String(saved.full_name || ''),
+            Email: recipient,
+            'Abstract title': String(saved.abstract_title || ''),
+            Decision: newStatus,
+          },
+        });
+        for (const item of notifications) {
+          if (isEmailAddress(item.recipient) || item.recipientRole === 'ADMIN') await this.insertEmailNotification(item, transaction);
+        }
+        if (!isEmailAddress(recipient)) {
+          this.logger.warn(JSON.stringify({
+            event: 'email.notification.skipped',
+            type: 'ABSTRACT_DECISION',
+            reason: 'invalid_or_missing_recipient',
+          }));
+        }
+      }
+      return saved;
+    });
+    for (const notification of notifications) {
+      if (isEmailAddress(notification.recipient)) {
+        await this.dispatchQueuedEmailBestEffort(notification.dedupeKey, notification.type);
+      }
+    }
+    return updated;
   }
 
   async transitionOrderStatus(orderId: string, fromStatuses: string[], toStatus: string): Promise<boolean> {
@@ -959,17 +1626,38 @@ export class DataService {
           id,
         );
         if (Number(changed) === 1) {
-          await tx.$executeRawUnsafe(
-            "INSERT INTO payment_notifications (id, registration_id, type, status, attempts, next_attempt_at) VALUES (?, ?, 'PAYMENT_CONFIRMED', 'PENDING', 0, NOW(3)) ON DUPLICATE KEY UPDATE registration_id = VALUES(registration_id)",
-            randomUUID(),
+          const row = ((await tx.$queryRawUnsafe(
+            'SELECT `id`, `full_name`, `email`, `plan_name`, `amount_usd`, `currency`, `created_at` FROM `registration_intents` WHERE `id` = ? LIMIT 1',
             id,
-          );
+          )) as Record<string, any>[])[0];
+          if (row) {
+            const notification: EmailNotification = {
+              type: 'PAYMENT_CONFIRMED',
+              dedupeKey: `PAYMENT_CONFIRMED:${id}`,
+              recipient: String(row.email || ''),
+              payload: { registrationId: id },
+            };
+            const paired = this.notificationPair(notification, {
+              eventType: 'PAYMENT_CONFIRMED',
+              submittedAt: new Date().toISOString(),
+              referenceId: id,
+              fields: { Registration: String(row.plan_name || ''), Status: 'paid' },
+            });
+            for (const item of paired) {
+              if (isEmailAddress(item.recipient) || item.recipientRole === 'ADMIN') await this.insertEmailNotification(item, tx);
+            }
+          }
         }
         return Number(changed);
       });
       const rows = (await this.list('registration_intents', { id })) as Record<string, unknown>[];
       updated = rows[0] ?? null;
-      if (Number(affected) === 1) await this.deliverPaymentConfirmation(id, updated);
+      if (Number(affected) === 1) {
+        await this.dispatchQueuedEmailBestEffort(`PAYMENT_CONFIRMED:${id}`, 'PAYMENT_CONFIRMED');
+        if (isEmailAddress(String(process.env.ADMIN_NOTIFICATION_EMAIL || '').trim())) {
+          await this.dispatchQueuedEmailBestEffort(`PAYMENT_CONFIRMED:${id}:ADMIN`, 'PAYMENT_CONFIRMED');
+        }
+      }
     } else {
       updated = await this.update('registration_intents', id, dataToUpdate) as Record<string, unknown> | null;
     }
@@ -977,42 +1665,14 @@ export class DataService {
     return updated;
   }
 
-  async deliverPaymentConfirmation(registrationId: string, registration?: Record<string, unknown> | null) {
-    const claimed = await (this.prisma as any).$executeRawUnsafe(
-      "UPDATE payment_notifications SET status = 'SENDING', attempts = attempts + 1, updated_at = NOW(3) WHERE registration_id = ? AND type = 'PAYMENT_CONFIRMED' AND status IN ('PENDING', 'FAILED') AND next_attempt_at <= NOW(3)",
-      registrationId,
-    );
-    if (Number(claimed) !== 1) return { skipped: true };
-
-    try {
-      const result = await this.sendPaymentSuccessNotification(registrationId, registration ?? null);
-      await (this.prisma as any).$executeRawUnsafe(
-        "UPDATE payment_notifications SET status = 'SENT', sent_at = NOW(3), last_error = NULL, updated_at = NOW(3) WHERE registration_id = ? AND type = 'PAYMENT_CONFIRMED' AND status = 'SENDING'",
-        registrationId,
-      );
-      return result;
-    } catch (error) {
-      const message = (error instanceof Error ? error.message : String(error)).slice(0, 2000);
-      await (this.prisma as any).$executeRawUnsafe(
-        "UPDATE payment_notifications SET status = 'FAILED', last_error = ?, next_attempt_at = DATE_ADD(NOW(3), INTERVAL LEAST(POW(2, attempts), 60) MINUTE), updated_at = NOW(3) WHERE registration_id = ? AND type = 'PAYMENT_CONFIRMED' AND status = 'SENDING'",
-        message,
-        registrationId,
-      );
-      return { success: false, retryable: true };
-    }
+  async deliverPaymentConfirmation(registrationId: string) {
+    const user = await this.deliverEmailNotification(`PAYMENT_CONFIRMED:${registrationId}`);
+    const admin = await this.deliverEmailNotification(`PAYMENT_CONFIRMED:${registrationId}:ADMIN`);
+    return { user, admin };
   }
 
   async retryFailedPaymentNotifications(limit = 50) {
-    const batchSize = Math.min(Math.max(Math.floor(limit), 1), 100);
-    await (this.prisma as any).$executeRawUnsafe(
-      "UPDATE payment_notifications SET status = 'FAILED' WHERE status = 'SENDING' AND updated_at < DATE_SUB(NOW(3), INTERVAL 10 MINUTE)",
-    );
-    const rows = (await (this.prisma as any).$queryRawUnsafe(
-      "SELECT registration_id FROM payment_notifications WHERE status IN ('PENDING', 'FAILED') AND next_attempt_at <= NOW(3) ORDER BY next_attempt_at ASC LIMIT ?",
-      batchSize,
-    )) as Array<{ registration_id: string }>;
-    for (const row of rows) await this.deliverPaymentConfirmation(row.registration_id);
-    return { attempted: rows.length };
+    return this.retryFailedEmailNotifications(limit);
   }
 
   async verifyPaymentWebhook(
@@ -1230,10 +1890,12 @@ export class DataService {
     };
   }
 
-  async sendPaymentSuccessNotification(registrationId: string, registration: Record<string, unknown> | null) {
+  async sendPaymentSuccessNotification(registrationId: string, _registration: Record<string, unknown> | null) {
     const rows = await this.list('registration_intents', { id: registrationId }) as any[];
-    const row = rows[0] || registration;
-    if (!row || !row.email) return null;
+    const row = rows[0];
+    if (!row || String(row.payment_status || '').toLowerCase() !== 'paid' || !isEmailAddress(String(row.email || ''))) {
+      throw new ConflictException('A persisted paid registration with a valid recipient is required');
+    }
 
     const gatewayResponse = row.gateway_response && typeof row.gateway_response === 'object' && !Array.isArray(row.gateway_response)
       ? row.gateway_response as Record<string, unknown>
@@ -1243,8 +1905,12 @@ export class DataService {
       ? await this.list('orders', { id: orderId, registration_id: registrationId }) as Record<string, any>[]
       : [];
     const order = orders[0];
+    if (!order || !['PAID', 'REFUND_PENDING', 'PARTIALLY_REFUNDED', 'REFUNDED'].includes(String(order.status || '').toUpperCase())) {
+      throw new ConflictException('A persisted paid order is required before payment confirmation');
+    }
     const payments = order ? await this.list('payments', { order_id: order.id, status: 'SUCCESS' }) as Record<string, any>[] : [];
     const payment = payments[0];
+    if (!payment) throw new ConflictException('A verified successful payment is required before confirmation');
     const acknowledgementNumber = this.generateAcknowledgementNumber(registrationId);
     const receiptNumber = this.generateReceiptNumber(registrationId, order?.order_number);
     const currency = String(order?.gateway_currency || row.currency || 'USD');
@@ -1259,38 +1925,91 @@ export class DataService {
     const receiptUrl = order?.access_token
       ? `${frontendUrl}/?payment=success&order=${encodeURIComponent(String(order.access_token))}`
       : null;
+    const accommodation = order.accommodation_option_id && order.accommodation_name
+      ? {
+        name: String(order.accommodation_name),
+        checkIn: String(order.accommodation_check_in || ''),
+        checkOut: String(order.accommodation_check_out || ''),
+        nights: Number(order.accommodation_nights || 0),
+        total: `${currency} ${Number(order.accommodation_total || 0).toFixed(2)}`,
+      }
+      : null;
 
-    const html = `
-      <h1>Registration confirmed</h1>
-      <p>Thank you for registering. Your payment has been successfully received.</p>
-      <p><strong>Registration ID:</strong> ${escapeHtml(row.id ?? registrationId)}</p>
-      <p><strong>Acknowledgement Number:</strong> ${escapeHtml(acknowledgementNumber)}</p>
-      <p><strong>Receipt Number:</strong> ${escapeHtml(receiptNumber)}</p>
-      <p><strong>Payment Provider:</strong> ${escapeHtml(provider)}</p>
-      <p><strong>Amount:</strong> ${escapeHtml(currency)} ${escapeHtml(amount)}</p>
-      ${order?.order_number ? `<p><strong>Order Number:</strong> ${escapeHtml(order.order_number)}</p>` : ''}
-      ${payment?.provider_payment_id ? `<p><strong>Payment ID:</strong> ${escapeHtml(payment.provider_payment_id)}</p>` : ''}
-      ${receiptUrl ? `<p><a href="${escapeHtml(receiptUrl)}">View and download your payment receipt</a></p>` : ''}
-      <p>You can present this acknowledgement number during check-in.</p>
-    `;
-
-    await this.emailService.send({
-      to: String(row.email),
-      subject: 'Conference Registration Payment Confirmed',
-      html,
-      ...(receipt ? {
-        attachments: [{
-          filename: `receipt-${receipt.receiptNumber}.pdf`,
-          content: receipt.pdfBase64,
-        }],
-      } : {}),
-    });
+    await this.emailService.sendPaymentConfirmation(
+      String(row.email),
+      {
+        firstName: String(row.full_name || '').split(/\s+/)[0],
+        registrationId: String(row.id ?? registrationId),
+        acknowledgementNumber,
+        receiptNumber,
+        provider,
+        amount: `${currency} ${amount}`,
+        orderNumber: order.order_number ? String(order.order_number) : undefined,
+        paymentId: payment.provider_payment_id ? String(payment.provider_payment_id) : undefined,
+        receiptUrl,
+        accommodation,
+      },
+      receipt ? [{
+        filename: `receipt-${receipt.receiptNumber}.pdf`,
+        content: receipt.pdfBase64,
+      }] : [],
+    );
 
     return {
       acknowledgementNumber,
       receiptNumber,
       emailSent: true,
     };
+  }
+
+  private async sendPaymentAdminNotification(registrationId: string, recipient: string) {
+    const registration = ((await this.list('registration_intents', { id: registrationId })) as Record<string, any>[])[0];
+    if (!registration || String(registration.payment_status || '').toLowerCase() !== 'paid') {
+      throw new ConflictException('A persisted paid registration is required before admin notification');
+    }
+    const gatewayResponse = registration.gateway_response && typeof registration.gateway_response === 'object'
+      ? registration.gateway_response as Record<string, unknown>
+      : {};
+    const orderId = String(gatewayResponse.orderId || '');
+    const order = orderId
+      ? ((await this.list('orders', { id: orderId, registration_id: registrationId })) as Record<string, any>[])[0]
+      : undefined;
+    if (!order || !['PAID', 'REFUND_PENDING', 'PARTIALLY_REFUNDED', 'REFUNDED'].includes(String(order.status || '').toUpperCase())) {
+      throw new ConflictException('A persisted paid order is required before admin notification');
+    }
+    const payments = (await this.list('payments', { order_id: order.id, status: 'SUCCESS' })) as Record<string, any>[];
+    const verifiedPayments = payments.filter((payment) =>
+      String(payment.provider).toLowerCase() === String(order.provider).toLowerCase() &&
+      Boolean(payment.provider_payment_id) &&
+      String(payment.provider_order_id || '') === String(order.provider_order_id || '') &&
+      Number(payment.amount) === Number(order.final_amount) &&
+      String(payment.currency).toUpperCase() === String(order.currency).toUpperCase() &&
+      Number(payment.gateway_amount) === Number(order.gateway_amount) &&
+      String(payment.gateway_currency).toUpperCase() === String(order.gateway_currency).toUpperCase(),
+    );
+    if (verifiedPayments.length !== 1) {
+      throw new ConflictException('A verified successful payment is required before admin notification');
+    }
+    const payment = verifiedPayments[0];
+    const accommodation = order.accommodation_option_id
+      ? `${String(order.accommodation_name || 'Accommodation')}: ${String(order.accommodation_check_in || '')} to ${String(order.accommodation_check_out || '')}`
+      : '';
+    await this.emailService.sendAdminEventNotification(recipient, {
+      eventType: 'PAYMENT_CONFIRMED',
+      submittedAt: String(payment.created_at || new Date().toISOString()),
+      referenceId: String(order.order_number || order.id),
+      fields: {
+        Name: String(registration.full_name || ''),
+        Email: String(registration.email || ''),
+        Registration: String(registration.plan_name || registration.plan_key || ''),
+        Quantity: String(order.quantity || ''),
+        'Order number': String(order.order_number || order.id),
+        Provider: String(order.provider || ''),
+        'Authoritative order amount': `${String(order.currency || 'USD')} ${Number(order.final_amount || 0).toFixed(2)}`,
+        'Provider-confirmed charge': `${String(payment.gateway_currency || 'USD')} ${(Number(payment.gateway_amount || 0) / 100).toFixed(2)}`,
+        Accommodation: accommodation,
+      },
+    });
   }
 
   private generateAcknowledgementNumber(registrationId: string) {

@@ -16,7 +16,7 @@ Your application is configured for a self-hosted Hostinger deployment with the f
 | **Backend** | Hostinger / Node app | Business plan | ✅ |
 | **Database** | MySQL | Local or managed | ✅ |
 | **Images** | Cloudinary | Free | ✅ |
-| **Emails** | Resend | Free | ✅ |
+| **Emails** | Hostinger SMTP via Nodemailer | Hostinger mailbox plan | ✅ |
 
 ---
 
@@ -47,7 +47,7 @@ Your application is configured for a self-hosted Hostinger deployment with the f
 **Added:**
 - `mysql2` (^3.15.3) - MySQL driver for Node.js
 - `cloudinary` (^2.0.2) - Image storage integration
-- `resend` (^3.2.0) - Email service integration
+- `nodemailer` - Hostinger SMTP email transport
 
 **Impact:**
 - ✅ MySQL database support
@@ -88,12 +88,16 @@ Your application is configured for a self-hosted Hostinger deployment with the f
 
 **New Files Created:**
 - `backend/src/email/email.service.ts`
-  - Send transactional emails via Resend
-  - Pre-built email templates:
-    - Registration confirmation
-    - Abstract submission confirmation
-    - Password reset
-  - Fully typed with TypeScript
+  - Send transactional emails via Hostinger SMTP
+  - Responsive HTML and plain-text templates for public form receipts, abstract decisions, registration/payment events, cancellations, and refunds
+  - Retains the existing password-reset template and PDF receipt attachments
+  - Provides the centralized SMTP transport and template-rendering entry point
+- `backend/src/data/data.service.ts`
+  - Persists public records and notification events together
+  - Tracks deliveries, prevents duplicate events, retries transient failures, and records permanent failures
+- `backend/src/payments/payments.service.ts`
+  - Queues failure/cancellation notifications only after persisted order transitions
+  - Queues refund notifications only after provider-confirmed refunds
 
 - `backend/src/email/email.module.ts`
   - EmailModule configuration
@@ -104,10 +108,9 @@ Your application is configured for a self-hosted Hostinger deployment with the f
   - Added EmailModule to imports
 
 **Impact:**
-- ✅ Reliable email delivery (99.5% uptime)
-- ✅ Free tier: 100 emails/day
-- ✅ Professional email templates
-- ✅ SMTP alternative to backend email handling
+- Email delivery failures do not undo successful public submissions or verified payment/refund state.
+- Attendee email addresses are taken from validated public form records or trusted persisted registration records; attendees do not need accounts or login.
+- The existing database-backed outbox is retried by the running API process; SMTP acceptance is not a guarantee of inbox delivery.
 
 ---
 
@@ -117,7 +120,7 @@ Your application is configured for a self-hosted Hostinger deployment with the f
 - `backend/.env.example`
   - Comprehensive configuration guide
   - All required variables documented
-  - MySQL, Cloudinary, Resend credentials
+  - MySQL, Cloudinary, and SMTP credentials
   - CORS settings for domain
 
 - `frontend/.env.example`
@@ -270,7 +273,7 @@ This project is designed to run without any external database dependency. The fr
 | Render | 750 hrs/mo | $0 |
 | MySQL | local or managed | $0-$20 |
 | Cloudinary | 25 GB | $0 |
-| Resend | 100 emails/day | $0 |
+| Hostinger Email | Depends on mailbox plan | Included with supported plans |
 | Hostinger | .com renewal | ~$3/year |
 | **Total** | - | **~$3/year** |
 
@@ -279,7 +282,7 @@ This project is designed to run without any external database dependency. The fr
 ### When to Upgrade
 - Render sleep issues → Hobby $7/month
 - Database grows beyond local capacity → upgrade MySQL hosting plan
-- More than 100 emails/day → Resend paid
+- Email volume above mailbox limits → upgrade the Hostinger Email plan
 - Image storage > 25GB → Cloudinary paid
 
 ---
@@ -289,7 +292,7 @@ This project is designed to run without any external database dependency. The fr
 **Backend Ready:**
 - ✅ Prisma schema updated for MySQL
 - ✅ Cloudinary service integrated
-- ✅ Resend email service integrated
+- ✅ Centralized Hostinger SMTP email service integrated
 - ✅ Environment variables configured
 - ✅ render.yaml deployment config
 - ✅ Health check endpoint
@@ -317,7 +320,7 @@ This project is designed to run without any external database dependency. The fr
 ☐ Render - https://render.com  
 ☐ Vercel - https://vercel.com
 ☐ Cloudinary - https://cloudinary.com
-☐ Resend - https://resend.com
+☐ Hostinger Email mailbox for the conference domain
 ☐ Hostinger - https://hostinger.com (if needed)
 ```
 
@@ -325,7 +328,7 @@ This project is designed to run without any external database dependency. The fr
 ```
 ☐ MySQL: DATABASE_URL
 ☐ Cloudinary: Cloud Name, API Key, Secret
-☐ Resend: API Key
+☐ SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS, SMTP_FROM
 ```
 
 ### 3. Deploy Backend (5 minutes)
@@ -358,7 +361,7 @@ This project is designed to run without any external database dependency. The fr
 - [Vercel Docs](https://vercel.com/docs)
 - [MySQL Docs](https://dev.mysql.com/doc/)
 - [Cloudinary Docs](https://cloudinary.com/documentation)
-- [Resend Docs](https://resend.com/docs)
+- [Hostinger Email documentation](https://www.hostinger.com/help/category/email)
 
 **Application Troubleshooting:**
 - See DEPLOYMENT_GUIDE.md → Troubleshooting section

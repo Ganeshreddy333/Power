@@ -2,7 +2,7 @@
 
 This repository contains a Next.js frontend and a NestJS backend for a conference application.
 
-See `DEPLOYMENT_GUIDE.md` for full production deployment instructions for a self-hosted Hostinger deployment using MySQL, Cloudinary, and Resend.
+See `HOSTINGER_DEPLOYMENT.md` for self-hosted deployment instructions using MySQL, Cloudinary, and Hostinger SMTP. Configure the backend SMTP environment variables in the Hostinger application settings; do not expose them to the frontend.
 
 Quick steps to prepare and push to GitHub:
 

@@ -34,6 +34,7 @@ export class AdminDataGuard implements CanActivate {
       isPublicSpeakerProfile ||
       (request.method === 'GET' && publicReadTables.has(table)) ||
       (request.method === 'POST' && publicInsertTables.has(table)) ||
+      (request.method === 'POST' && request.params.bucket === 'abstract-assets' && /\/storage\/[^/]+\/upload$/.test(request.path || '')) ||
       (request.method === 'POST' && [
         '/rpc/validate_registration_coupon',
       ].includes(path));

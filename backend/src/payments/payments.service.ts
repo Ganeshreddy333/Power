@@ -46,9 +46,6 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     }, SWEEP_INTERVAL_MS);
     this.sweepTimer.unref?.();
     this.notificationTimer = setInterval(() => {
-      this.data.retryFailedPaymentNotifications().catch((error) =>
-        this.logger.warn(`payment notification retry failed: ${this.errorMessage(error)}`),
-      );
       this.data.retryFailedEmailNotifications().catch((error) =>
         this.logger.warn(`email notification retry failed: ${this.errorMessage(error)}`),
       );
@@ -68,7 +65,12 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     const stale = await this.data.findStaleOpenOrders(STALE_ORDER_MINUTES);
     let cancelled = 0;
     for (const order of stale) {
-      const transitioned = await this.data.transitionOrderStatus(order.id, ['CREATED', 'PENDING'], 'CANCELLED');
+      const transitioned = await this.data.transitionOrderWithEmailNotification(
+        String(order.id),
+        ['CREATED', 'PENDING'],
+        'CANCELLED',
+        'PAYMENT_CANCELLED',
+      );
       if (!transitioned) continue;
       if (order.coupon_code) await this.data.releaseCoupon(order.coupon_code);
       await this.data.releaseRegistrationCheckoutClaim(order.registration_id);
@@ -1042,7 +1044,13 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
       // into a failed state — so a buyer who retries after a failure gets the
       // coupon back and can reuse it, while repeated failure events for the same
       // order don't drive the counter down more than once.
-      const transitioned = await this.data.transitionOrderStatus(order.id, ['CREATED', 'PENDING'], 'FAILED');
+      const transitioned = await this.data.transitionOrderWithEmailNotification(
+        String(order.id),
+        ['CREATED', 'PENDING'],
+        'FAILED',
+        'PAYMENT_FAILED',
+        details.eventId || details.paymentId,
+      );
       if (transitioned) {
         if (current.coupon_code) await this.data.releaseCoupon(current.coupon_code);
         await this.data.releaseRegistrationCheckoutClaim(current.registration_id);
@@ -1068,7 +1076,12 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     if (statusNow === 'CANCELLED') return { status: 'CANCELLED', orderNumber: order.order_number };
 
     if (!['CREATED', 'PENDING', 'FAILED'].includes(statusNow)) throw new ConflictException('Order cannot be cancelled from its current state');
-    const transitioned = await this.data.transitionOrderStatus(order.id, ['CREATED', 'PENDING', 'FAILED'], 'CANCELLED');
+    const transitioned = await this.data.transitionOrderWithEmailNotification(
+      String(order.id),
+      ['CREATED', 'PENDING', 'FAILED'],
+      'CANCELLED',
+      'PAYMENT_CANCELLED',
+    );
     if (!transitioned) {
       const latest = ((await this.data.list('orders', { id: order.id })) as Record<string, any>[])[0];
       return { status: String(latest?.status || 'PENDING'), orderNumber: order.order_number };
@@ -1115,6 +1128,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     if (existingRefund && String(existingRefund.status).toUpperCase() !== 'PENDING') {
       if (String(existingRefund.status).toUpperCase() === 'SUCCEEDED') {
         await this.syncRefundedOrderStatus(current);
+        await this.data.queueRefundConfirmationNotification(String(current.id), refundId);
       }
       return { status: current.status, orderNumber: current.order_number, duplicate: true };
     }
@@ -1162,6 +1176,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     let orderStatus = String(current.status || '').toUpperCase();
     if (status === 'SUCCEEDED') {
       orderStatus = await this.syncRefundedOrderStatus(current);
+      await this.data.queueRefundConfirmationNotification(String(current.id), refundId);
     } else if (status === 'FAILED') {
       const existingSuccessful = totalRefundedMinor > 0 || (await this.data.list('refunds', { order_id: current.id, status: 'SUCCEEDED' }) as Record<string, any>[]).length > 0;
       if (!existingSuccessful && String(current.status).toUpperCase() === 'REFUND_PENDING') {

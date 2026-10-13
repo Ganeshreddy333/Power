@@ -227,6 +227,9 @@ export const apiClient = {
           if (!response.ok || data?.error) {
             return { data: null, error: { message: data?.message || data?.error || response.statusText } };
           }
+          if (typeof data?.url === "string" && data.url.startsWith("/")) {
+            data.url = `${API_BASE_URL}${data.url}`;
+          }
           return { data, error: null as { message: string } | null };
         } catch (error) {
           return { data: null, error: { message: error instanceof Error ? error.message : "File upload failed" } };

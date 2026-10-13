@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Pencil, Plus, Trash2 } from "lucide-react";
+import ImageUploadField from "@/components/admin/ImageUploadField";
 import type { Tables } from "@/integrations/api/types";
 
 type Speaker = Tables<"speakers">;
@@ -33,6 +34,8 @@ const AdminSpeakers = () => {
   const [form, setForm] = useState(emptySpeaker);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  const [imageUploading, setImageUploading] = useState(false);
+  const [imagePending, setImagePending] = useState(false);
   const { toast } = useToast();
 
   const fetchSpeakers = useCallback(async () => {
@@ -196,10 +199,14 @@ const AdminSpeakers = () => {
                 value={form.topic}
                 onChange={(e) => setForm({ ...form, topic: e.target.value })}
               />
-              <Input
-                placeholder="Image URL"
+              <ImageUploadField
+                bucket="speaker-images"
+                label="Speaker image"
                 value={form.image_url}
-                onChange={(e) => setForm({ ...form, image_url: e.target.value })}
+                onChange={(image_url) => setForm((current) => ({ ...current, image_url }))}
+                onUploadingChange={setImageUploading}
+                onPendingChange={setImagePending}
+                active={open}
               />
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 <Input
@@ -245,7 +252,7 @@ const AdminSpeakers = () => {
                 value={form.bio}
                 onChange={(e) => setForm({ ...form, bio: e.target.value })}
               />
-              <Button onClick={handleSave} className="w-full">
+              <Button onClick={handleSave} className="w-full" disabled={imageUploading || imagePending}>
                 {editingId ? "Update" : "Create"} Speaker
               </Button>
             </div>
