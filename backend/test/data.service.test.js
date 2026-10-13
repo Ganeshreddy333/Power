@@ -1113,7 +1113,10 @@ describe('DataService raw-query behavior', () => {
 
     try {
       await service.insertEmailNotification(paired[1]);
-      expect(prisma.$executeRawUnsafe.mock.calls[0][0]).toContain("'FAILED'");
+      expect(prisma.$executeRawUnsafe.mock.calls[0][7]).toBe('FAILED');
+      expect(prisma.$executeRawUnsafe.mock.calls[0][0]).toContain('DATE_ADD(NOW(3), INTERVAL 5 MINUTE)');
+      expect(prisma.$executeRawUnsafe.mock.calls[0][0]).not.toContain("IF(? = 'FAILED'");
+      expect(prisma.$executeRawUnsafe.mock.calls[0]).toHaveLength(9);
       expect(prisma.$executeRawUnsafe.mock.calls[0]).toContain('ADMIN_NOTIFICATION_EMAIL_UNAVAILABLE');
 
       process.env.ADMIN_NOTIFICATION_EMAIL = 'admin@example.test';
@@ -1125,6 +1128,23 @@ describe('DataService raw-query behavior', () => {
       if (previousAdmin === undefined) delete process.env.ADMIN_NOTIFICATION_EMAIL;
       else process.env.ADMIN_NOTIFICATION_EMAIL = previousAdmin;
     }
+  });
+
+  it('does not compare bound status strings with SQL literals when queuing email', async () => {
+    const prisma = { $executeRawUnsafe: jest.fn().mockResolvedValue(1) };
+    const service = new DataService(prisma, undefined, undefined);
+
+    await service.insertEmailNotification({
+      type: 'CONTACT_ACKNOWLEDGEMENT',
+      dedupeKey: 'CONTACT_ACKNOWLEDGEMENT:contact-collation',
+      recipient: 'user@example.test',
+      payload: {},
+    });
+
+    const [query] = prisma.$executeRawUnsafe.mock.calls[0];
+    expect(query).toContain('NOW(3))');
+    expect(query).not.toContain("IF(? = 'FAILED'");
+    expect(prisma.$executeRawUnsafe.mock.calls[0]).toHaveLength(9);
   });
 
   it('retries a failed user delivery independently from an already deliverable admin copy', async () => {

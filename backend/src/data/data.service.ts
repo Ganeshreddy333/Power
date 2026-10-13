@@ -500,9 +500,12 @@ export class DataService {
   private async insertEmailNotification(notification: EmailNotification, executor: RawExecutor = this.prisma as any) {
     const configuredAdmin = notification.recipientRole === 'ADMIN' && isEmailAddress(notification.recipient);
     const initialStatus = notification.recipientRole === 'ADMIN' && !configuredAdmin ? 'FAILED' : 'PENDING';
+    const nextAttemptAt = initialStatus === 'FAILED'
+      ? 'DATE_ADD(NOW(3), INTERVAL 5 MINUTE)'
+      : 'NOW(3)';
     await executor.$executeRawUnsafe(
       `INSERT INTO \`email_notifications\` (\`id\`, \`dedupe_key\`, \`type\`, \`recipient\`, \`recipient_role\`, \`payload\`, \`status\`, \`attempts\`, \`last_error\`, \`next_attempt_at\`)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, IF(? = 'FAILED', DATE_ADD(NOW(3), INTERVAL 5 MINUTE), NOW(3)))
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ${nextAttemptAt})
        ON DUPLICATE KEY UPDATE \`dedupe_key\` = VALUES(\`dedupe_key\`)`,
       randomUUID(),
       notification.dedupeKey,
@@ -512,7 +515,6 @@ export class DataService {
       JSON.stringify(notification.payload),
       initialStatus,
       initialStatus === 'FAILED' ? 'ADMIN_NOTIFICATION_EMAIL_UNAVAILABLE' : null,
-      initialStatus,
     );
   }
 
