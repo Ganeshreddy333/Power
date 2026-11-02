@@ -19,9 +19,14 @@ const Footer = () => {
             <p className="max-w-md text-sm leading-7 text-section-dark-foreground/75 font-body">
               {values.footer_description}
             </p>
-            <p className="mt-5 border-l-2 border-gold pl-3 text-xs font-bold uppercase tracking-[0.16em] text-gold">
+            <a
+              href="https://nvsinternationalservices.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-5 inline-block border-l-2 border-gold pl-3 text-xs font-bold uppercase tracking-[0.16em] text-gold transition-colors hover:text-gold-light focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold"
+            >
               {values.organizer_name}
-            </p>
+            </a>
           </div>
           <div>
             <h4 className="mb-5 font-display text-sm font-black uppercase tracking-[0.16em] text-hero-foreground">Quick Links</h4>

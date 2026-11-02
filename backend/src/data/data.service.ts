@@ -65,8 +65,8 @@ const TABLES: Record<string, TableConfig> = {
     defaultOrder: [{ column: 'display_order' }, { column: 'created_at' }],
   },
   information_blocks: {
-    columns: ['id', 'title', 'subtitle', 'content', 'category', 'cta_label', 'cta_url', 'display_order', 'is_visible', 'created_at', 'updated_at'],
-    writable: ['title', 'subtitle', 'content', 'category', 'cta_label', 'cta_url', 'display_order', 'is_visible'],
+    columns: ['id', 'title', 'subtitle', 'content', 'image_urls', 'category', 'cta_label', 'cta_url', 'display_order', 'is_visible', 'created_at', 'updated_at'],
+    writable: ['title', 'subtitle', 'content', 'image_urls', 'category', 'cta_label', 'cta_url', 'display_order', 'is_visible'],
     defaultOrder: [{ column: 'display_order' }, { column: 'created_at' }],
   },
   contact_messages: {

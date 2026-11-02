@@ -28,7 +28,7 @@ const HomeHighlights = () => {
   const welcome = getSection("home_welcome", {
     title: "Energy Innovation, Research, and Global Collaboration",
     content:
-      "Renewable Energy 2027 brings together clean-energy researchers, technology leaders, institutions, and policy voices for a focused virtual conference on practical pathways to sustainable power.\n\nThe experience is designed to feel direct, credible, and active: strong scientific sessions, clear registration paths, publication visibility, and international networking for presenters and delegates.",
+      "Renewable Energy 2027 brings together clean-energy researchers, technology leaders, institutions, and policy voices for a focused offline conference on practical pathways to sustainable power.\n\nThe experience is designed to feel direct, credible, and active: strong scientific sessions, clear registration paths, publication visibility, and international networking for presenters and delegates.",
   });
   const managedProfiles = profiles.map((profile, index) => {
     const section = getSection(index === 0 ? "home_profile_research" : "home_profile_participants", {

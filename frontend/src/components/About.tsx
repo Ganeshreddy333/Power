@@ -53,7 +53,7 @@ const conferenceHighlights = [
   "World-Class Keynote & Plenary Addresses",
   "Technical, Parallel & Thematic Sessions",
   "Global Networking & Collaboration Opportunities",
-  "Fully Interactive Virtual Conference Platform",
+  "Fully Interactive Offline Conference Platform",
   "E-Certification & ISBN Proceedings",
   "Best Paper, Speaker & Young Researcher Awards",
   "Participation from Leading Global Institutions",
@@ -64,7 +64,7 @@ const conferenceHighlights = [
   "Opportunities for High-Impact Research Visibility",
   "Peer-Reviewed Abstracts & Presentations",
   "Access to Recorded Sessions & On-Demand Content",
-  "Digital Networking & Virtual Meetups",
+  "Digital Networking & Offline Meetups",
 ];
 
 const audience = [
@@ -125,7 +125,7 @@ const About = () => {
   const intro = getSection("about_intro", {
     title: "About the Conference",
     content:
-      "The World Conference on Renewable Energy & Sustainable Energy (Renewable Energy - 2027) is a distinguished global forum designed to convene leading scientists, keynote speakers, industry pioneers, and policy leaders in the field of energy and sustainability.\n\nThis high-impact virtual conference aims to showcase cutting-edge research, foster interdisciplinary dialogue, and drive strategic collaborations that accelerate the transition toward a low-carbon and sustainable energy future.\n\nRenewable Energy - 2027 offers an exclusive platform for thought leaders to present transformative ideas, engage with an international audience, and contribute to shaping the global energy agenda.",
+      "The World Conference on Renewable Energy & Sustainable Energy (Renewable Energy - 2027) is a distinguished global forum designed to convene leading scientists, keynote speakers, industry pioneers, and policy leaders in the field of energy and sustainability.\n\nThis high-impact offline conference aims to showcase cutting-edge research, foster interdisciplinary dialogue, and drive strategic collaborations that accelerate the transition toward a low-carbon and sustainable energy future.\n\nRenewable Energy - 2027 offers an exclusive platform for thought leaders to present transformative ideas, engage with an international audience, and contribute to shaping the global energy agenda.",
   });
   const benefits = getSection("about_speaker_benefits", {
     title: "Why Participate as a Speaker",

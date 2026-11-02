@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Pencil, Plus, Trash2 } from "lucide-react";
+import { ANNOUNCEMENT_BANNER_CATEGORY } from "@/lib/announcementBanners";
 
 type InformationBlock = Tables<"information_blocks">;
 
@@ -43,7 +44,7 @@ const AdminInformation = () => {
       return;
     }
 
-    setBlocks(data || []);
+    setBlocks((data || []).filter((block: InformationBlock) => block.category !== ANNOUNCEMENT_BANNER_CATEGORY));
   }, [toast]);
 
   useEffect(() => {
@@ -58,6 +59,10 @@ const AdminInformation = () => {
   const handleSave = async () => {
     if (!form.title.trim()) {
       toast({ title: "Title is required", variant: "destructive" });
+      return;
+    }
+    if (form.category.trim() === ANNOUNCEMENT_BANNER_CATEGORY) {
+      toast({ title: "That category is reserved for announcement banners", variant: "destructive" });
       return;
     }
 

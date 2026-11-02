@@ -3,7 +3,7 @@ const { StorageController } = require('../src/storage/storage.controller');
 describe('StorageController management image uploads', () => {
   const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
-  it.each(['speaker-images', 'media-partner-images'])(
+  it.each(['speaker-images', 'media-partner-images', 'banner-images'])(
     'stores a signature-validated image in the %s bucket and returns a public local URL',
     async (bucket) => {
     const storage = {

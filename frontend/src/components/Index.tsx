@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Download } from "lucide-react";
 import Navbar from "@/components/Navbar";
+import AnnouncementBanners from "@/components/AnnouncementBanners";
 import HeroSection from "@/components/HeroSection";
 import AboutSection from "@/components/AboutSection";
 import ImportantDates from "@/components/ImportantDates";
@@ -167,6 +168,7 @@ const IndexContent = () => {
       <HeroSection />
       <AboutSection />
       <ImportantDates />
+      <AnnouncementBanners />
       <ScheduleSection />
       <SpeakersSection showEmptyState={false} />
       <MediaPartnersSection />

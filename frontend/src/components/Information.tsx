@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/integrations/api/client";
 import { useLiveContentRefresh } from "@/hooks/useLiveContentRefresh";
+import { ANNOUNCEMENT_BANNER_CATEGORY } from "@/lib/announcementBanners";
 import type { Tables } from "@/integrations/api/types";
 import { isTenDigitPhoneNumber, normalizePhoneNumber } from "@/lib/phone";
 
@@ -73,7 +74,7 @@ const inPersonIncludes = [
   "Publication of accepted papers in Conference Proceedings (with ISBN/e-ISBN)",
 ];
 
-const virtualIncludes = [
+const offlineIncludes = [
   "Present your research from anywhere (home or workplace)",
   "Access to all live/recorded conference sessions",
   "E-copy of the Abstract Book and Program",
@@ -82,7 +83,7 @@ const virtualIncludes = [
 ];
 
 const faqs = [
-  ["Is this conference fully virtual?", "Yes, it is 100% online."],
+  ["Is this conference fully offline?", "Yes, it is an in-person event."],
   ["Will I get a certificate?", "Yes, all participants receive a certificate."],
   ["Can I present without a paper?", "Yes, poster/presentation-only options are available."],
   ["Is publication guaranteed?", "Subject to peer review."],
@@ -162,7 +163,7 @@ const Information = () => {
       .eq("is_visible", true)
       .order("display_order", { ascending: true });
 
-    if (data) setManagedBlocks(data);
+    if (data) setManagedBlocks(data.filter((block: InformationBlock) => block.category !== ANNOUNCEMENT_BANNER_CATEGORY));
   }, []);
 
   useLiveContentRefresh(fetchBlocks);
@@ -275,8 +276,8 @@ const Information = () => {
             <FieldGroup title="For In-Person Speakers & Participants">
               <BulletList items={inPersonIncludes} />
             </FieldGroup>
-            <FieldGroup title="For Virtual Speakers & Participants">
-              <BulletList items={virtualIncludes} />
+            <FieldGroup title="For Offline Speakers & Participants">
+              <BulletList items={offlineIncludes} />
             </FieldGroup>
           </>
         );
@@ -412,7 +413,7 @@ const Information = () => {
               />
             </FieldGroup>
             <FieldGroup title="Technical Guidelines">
-              <p className="font-bold text-card-foreground">To ensure a smooth virtual session:</p>
+              <p className="font-bold text-card-foreground">To ensure a smooth offline session:</p>
               <BulletList items={["Use a stable high-speed internet connection", "Join via laptop/desktop (recommended)"]} />
               <p className="font-bold text-card-foreground">Ensure:</p>
               <BulletList items={["Working microphone", "HD camera (optional but preferred)"]} />

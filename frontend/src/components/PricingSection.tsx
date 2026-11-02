@@ -53,12 +53,12 @@ type CategoryKey =
   | "pre-poster"
   | "pre-student"
   | "pre-delegate"
-  | "pre-virtual"
+  | "pre-offline"
   | "early-speaker"
   | "early-poster"
   | "early-student"
   | "early-delegate"
-  | "early-virtual"
+  | "early-offline"
   | "mid-speaker"
   | "mid-poster"
   | "mid-student"
@@ -979,10 +979,10 @@ const PricingSection = () => {
                     <DialogDescription>Please review the conference policies before continuing with registration.</DialogDescription>
                   </DialogHeader>
                   <div className="space-y-5 text-sm leading-relaxed text-muted-foreground">
-                    <section className="space-y-2"><h3 className="font-semibold text-foreground">Important Note</h3><p>If the virtual conference is postponed due to unavoidable circumstances beyond the organizers&apos; control, including technical disruptions, force majeure events, government restrictions, cyber incidents, or other emergency situations, refunds will not be applicable. In such cases, registrations will remain valid for the rescheduled event or future conference edition.</p></section>
-                    <section className="space-y-2"><h3 className="font-semibold text-foreground">Terms &amp; Conditions</h3><p>By registering for the virtual conference, participants agree to all conference terms and policies.</p><p>The organizers reserve the right to modify the conference program, speakers, schedule, or virtual platform if necessary.</p><p>Participants are responsible for ensuring stable internet connectivity and access to the required virtual meeting platform.</p><p>Conference access links and participation details will be shared with registered participants before the event.</p><p>Recording, redistribution, or unauthorized sharing of conference materials or access links is strictly prohibited.</p><p>In unavoidable circumstances, the conference may be postponed or rescheduled without prior notice.</p><p>If the conference is postponed, registrations will remain valid for the rescheduled event or future edition.</p><p>Participants are advised to regularly check the official conference website and registered email for updates and announcements.</p></section>
+                    <section className="space-y-2"><h3 className="font-semibold text-foreground">Important Note</h3><p>If the offline conference is postponed due to unavoidable circumstances beyond the organizers&apos; control, including technical disruptions, force majeure events, government restrictions, cyber incidents, or other emergency situations, refunds will not be applicable. In such cases, registrations will remain valid for the rescheduled event or future conference edition.</p></section>
+                    <section className="space-y-2"><h3 className="font-semibold text-foreground">Terms &amp; Conditions</h3><p>By registering for the offline conference, participants agree to all conference terms and policies.</p><p>The organizers reserve the right to modify the conference program, speakers, schedule, or offline platform if necessary.</p><p>Participants are responsible for ensuring stable internet connectivity and access to the conference platform.</p><p>Conference participation details will be shared with registered participants before the event.</p><p>Recording, redistribution, or unauthorized sharing of conference materials is strictly prohibited.</p><p>In unavoidable circumstances, the conference may be postponed or rescheduled without prior notice.</p><p>If the conference is postponed, registrations will remain valid for the rescheduled event or future edition.</p><p>Participants are advised to regularly check the official conference website and registered email for updates and announcements.</p></section>
                     <section className="space-y-2"><h3 className="font-semibold text-foreground">Refund &amp; Cancellation Policy</h3><p>All cancellation requests must be submitted in writing via email to the Conference Secretariat.</p><p>Cancellation before 50 days of the conference: 50% refund</p><p>Cancellation before 40 days of the conference: 30% refund</p><p>Cancellation within 30 days of the conference: No refund</p><p>Registration may be transferred to another participant if the registered attendee is unable to participate.</p><p>Eligible refunds will be processed within 4 weeks after the completion of the conference.</p></section>
-                    <section className="space-y-2"><h3 className="font-semibold text-foreground">Registration Includes</h3><h4 className="font-semibold text-foreground">For Virtual Speakers &amp; Participants</h4><p>Present your research from anywhere (home or workplace)</p><p>Access to all live/recorded conference sessions</p><p>E-copy of the Abstract Book and Program</p><p>E-Certificate of Participation/Presentation</p><p>Publication of accepted papers in Conference Proceedings (with ISBN/e-ISBN)</p></section>
+                    <section className="space-y-2"><h3 className="font-semibold text-foreground">Registration Includes</h3><h4 className="font-semibold text-foreground">For Offline Speakers &amp; Participants</h4><p>Present your research at the conference venue</p><p>Access to all conference sessions</p><p>E-copy of the Abstract Book and Program</p><p>E-Certificate of Participation/Presentation</p><p>Publication of accepted papers in Conference Proceedings (with ISBN/e-ISBN)</p></section>
                   </div>
                   <DialogFooter>
                     <Button type="button" variant="outline" onClick={() => { setHasAcceptedTerms(false); setIsTermsDialogOpen(false); }}>Deny</Button>

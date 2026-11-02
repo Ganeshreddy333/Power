@@ -91,6 +91,15 @@ The brochure is included at `frontend/public/brochure-2027.pdf` and is deployed 
 
 Create the MySQL database and user in Hostinger. Use the Hostinger database host, database name, username, and password in `DATABASE_URL`. Deploy migrations from the backend application with `npm run migrate:deploy`; do not use `prisma migrate dev` in production.
 
+### SQL files for HPanel/phpMyAdmin
+
+- For a brand-new, empty database, import `backend/prisma/hostinger-bootstrap.sql` once. It creates the current schema and records the matching Prisma migration history.
+- For an existing application database, use `npm run migrate:deploy` during deployment. Do not import the bootstrap file again.
+- If you must apply a schema change manually in phpMyAdmin, use only its pending SQL file from `backend/prisma/hpanel-migrations/`, in filename order. Then, from the backend directory, run `npx prisma migrate resolve --applied <migration-name>` for each manually imported migration so Prisma does not try to apply it again. Back up the database first.
+- The Prisma files in `backend/prisma/migrations/` are the source of truth. Whenever a migration is added, run `cd backend && npm run hpanel:export` and include the generated matching SQL copy in `backend/prisma/hpanel-migrations/`.
+- The backend build also runs `hpanel:export`, so the HPanel SQL copies are refreshed on redeployment. For every new migration, update `backend/prisma/hostinger-bootstrap.sql` as well so it remains a complete, current import for an empty database.
+- Never re-import a migration that is already applied. SQL migrations are not generally safe to run twice.
+
 Before switching traffic, verify:
 
 1. `https://api.your-domain.com/health` returns a healthy response.
@@ -98,5 +107,9 @@ Before switching traffic, verify:
 3. Registration and abstract submission work.
 4. Email, Cloudinary uploads, and signed payment webhooks work.
 5. MySQL backups are enabled.
+
+Use a dedicated database user with only the permissions required by this application. Keep database passwords, JWT secrets, payment credentials, and SMTP credentials in Hostinger environment settings; never commit them to the repository.
+
+The helper `scripts/hostinger-deploy.sh` builds both applications and applies pending backend migrations. It does not reset the admin password during normal deployments. Set `SEED_ADMIN=1` only when intentionally creating or resetting the admin account, and ensure the `ADMIN_*` values are configured securely first.
 
 Hostinger account limits and available Node.js application features vary by plan. If the plan cannot run two Node.js processes, host the frontend on Vercel and the backend on Hostinger, or use a separate backend host.

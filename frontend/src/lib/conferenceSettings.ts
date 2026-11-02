@@ -53,7 +53,7 @@ export const defaultImportantDates: ImportantDateItem[] = [
     id: "conference",
     title: "Conference Dates",
     date: "March 3-4, 2027",
-    desc: "Virtual online live stream",
+    desc: "Offline conference event",
   },
 ];
 

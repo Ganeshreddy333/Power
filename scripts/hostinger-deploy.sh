@@ -26,7 +26,9 @@ else
 fi
 npm run build
 npm run migrate:deploy
-npm run seed:admin || true
+if [ "${SEED_ADMIN:-0}" = "1" ]; then
+  npm run seed:admin
+fi
 
 cd "${FRONTEND_ROOT}"
 if [ -f package-lock.json ]; then

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { BedDouble, CalendarDays, Database, FileText, Handshake, Info, LayoutPanelTop, LogOut, Ticket, Users } from "lucide-react";
+import { BedDouble, CalendarDays, Database, FileText, Handshake, Info, LayoutPanelTop, LogOut, Megaphone, Ticket, Users } from "lucide-react";
 import AdminAccommodation from "@/components/admin/AdminAccommodation";
 import AdminSpeakers from "@/components/admin/AdminSpeakers";
 import AdminCoupons from "@/components/admin/AdminCoupons";
@@ -15,6 +15,7 @@ import AdminContent from "@/components/admin/AdminContent";
 import AdminInformation from "@/components/admin/AdminInformation";
 import AdminSubmissions from "@/components/admin/AdminSubmissions";
 import AdminConferenceSettings from "@/components/admin/AdminConferenceSettings";
+import AdminBanners from "@/components/admin/AdminBanners";
 
 const Admin = () => {
   const { user, isAdmin, loading, signOut } = useAuth();
@@ -61,9 +62,12 @@ const Admin = () => {
       {/* Admin Content */}
       <div className="container mx-auto px-4 py-8">
         <Tabs defaultValue="content" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-2 md:grid-cols-5 xl:grid-cols-9 max-w-7xl h-auto">
+          <TabsList className="grid w-full grid-cols-2 md:grid-cols-5 xl:grid-cols-10 max-w-7xl h-auto">
             <TabsTrigger value="content" className="flex items-center gap-2">
               <LayoutPanelTop className="w-4 h-4" /> Content
+            </TabsTrigger>
+            <TabsTrigger value="banners" className="flex items-center gap-2">
+              <Megaphone className="w-4 h-4" /> Highlights
             </TabsTrigger>
             <TabsTrigger value="speakers" className="flex items-center gap-2">
               <Users className="w-4 h-4" /> Speakers
@@ -93,6 +97,9 @@ const Admin = () => {
 
           <TabsContent value="content">
             <AdminContent />
+          </TabsContent>
+          <TabsContent value="banners">
+            <AdminBanners />
           </TabsContent>
           <TabsContent value="speakers">
             <AdminSpeakers />

@@ -180,6 +180,7 @@ CREATE TABLE IF NOT EXISTS `information_blocks` (
   `title` VARCHAR(191) NOT NULL,
   `subtitle` VARCHAR(191) NULL,
   `content` LONGTEXT NULL,
+  `image_urls` JSON NULL,
   `category` VARCHAR(191) NULL,
   `cta_label` VARCHAR(191) NULL,
   `cta_url` TEXT NULL,
@@ -282,7 +283,7 @@ ALTER TABLE `abstract_submissions`
 
 -- Migration: 20260830090000_add_abstract_session
 ALTER TABLE `abstract_submissions`
-  ADD COLUMN IF NOT EXISTS `session` VARCHAR(191) NULL;
+  ADD COLUMN `session` VARCHAR(191) NULL;
 
 -- Migration: 20260927120000_orders_payments
 -- Orders and Payments tables for secure, provider-agnostic checkout.
@@ -512,4 +513,5 @@ INSERT INTO `_prisma_migrations` (`id`, `checksum`, `finished_at`, `migration_na
 ('58eb1eed-1e80-4a0c-a09f-612d4e2159fb', '6446d073e10db05689640d906d7d5bec3cfebdd4aaa4040ca0fab293f76c1396', '2026-10-02 17:00:00.000', '20261002170000_speaker_profile_fields', NULL, NULL, '2026-10-02 17:00:00.000', 1),
 ('e6300ae2-a814-42ee-97c6-6e2a16d0f23e', '1d9fc97f4ceba210e49aefcb43f564e91727660b2fcd899989de82193e3618f3', '2026-10-02 18:00:00.000', '20261002180000_accommodation_checkout', NULL, NULL, '2026-10-02 18:00:00.000', 1),
 ('16386f6c-85ba-4f3d-afd4-f02e3156cde5', '2665e27d80ad64a40e6301f84a0f002f31cf744b0714e55e948ad72dbb45800d', '2026-10-11 01:00:00.000', '20261011010000_email_notification_outbox', NULL, NULL, '2026-10-11 01:00:00.000', 1),
-('a9833604-6f20-4e24-a0ce-c408b43547c6', '39ec294cc581bbd17953ad020c2980f4200a816264a72ceb1dde2cd75d82a56f', '2026-10-13 01:00:00.000', '20261013010000_dual_recipient_email_outbox', NULL, NULL, '2026-10-13 01:00:00.000', 1);
+('a9833604-6f20-4e24-a0ce-c408b43547c6', '39ec294cc581bbd17953ad020c2980f4200a816264a72ceb1dde2cd75d82a56f', '2026-10-13 01:00:00.000', '20261013010000_dual_recipient_email_outbox', NULL, NULL, '2026-10-13 01:00:00.000', 1),
+('05eaf1b7-52a5-4cf6-8ca0-c3e8ecdfce55', '312653fafc21baee1136b86869a309673e2254205b8f9919511bc5ac0e7d1be6', '2026-11-02 17:10:00.000', '20261102171000_information_block_image_urls', NULL, NULL, '2026-11-02 17:10:00.000', 1);

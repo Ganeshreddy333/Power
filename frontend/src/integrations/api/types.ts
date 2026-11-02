@@ -185,6 +185,7 @@ export type Database = {
           cta_url: string | null
           display_order: number | null
           id: string
+          image_urls: Json | null
           is_visible: boolean | null
           subtitle: string | null
           title: string
@@ -198,6 +199,7 @@ export type Database = {
           cta_url?: string | null
           display_order?: number | null
           id?: string
+          image_urls?: Json | null
           is_visible?: boolean | null
           subtitle?: string | null
           title: string
@@ -211,6 +213,7 @@ export type Database = {
           cta_url?: string | null
           display_order?: number | null
           id?: string
+          image_urls?: Json | null
           is_visible?: boolean | null
           subtitle?: string | null
           title?: string
