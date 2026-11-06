@@ -12,7 +12,8 @@ import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { normalizePhoneNumber } from "@/lib/phone";
+import { isValidInternationalPhoneNumber } from "@/lib/phone";
+import { InternationalPhoneInput } from "@/components/InternationalPhoneInput";
 
 const HeroSection = () => {
   const { values } = useSiteData();
@@ -21,6 +22,7 @@ const HeroSection = () => {
   const [brochureDialogOpen, setBrochureDialogOpen] = useState(false);
   const [brochureSubmitted, setBrochureSubmitted] = useState(false);
   const [isSubmittingBrochure, setIsSubmittingBrochure] = useState(false);
+  const [brochurePhone, setBrochurePhone] = useState("");
   const configuredTitle = getSection("hero_title").content.trim();
   const configuredTitleLines = configuredTitle.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const ampersandIndex = configuredTitle.indexOf("&");
@@ -36,11 +38,17 @@ const HeroSection = () => {
     const formData = new FormData(event.currentTarget);
     const fullName = String(formData.get("fullName") || "").trim();
     const email = String(formData.get("email") || "").trim();
-    const mobileNumber = String(formData.get("mobileNumber") || "").trim();
+    const mobileNumber = brochurePhone.trim();
     const company = String(formData.get("company") || "").trim();
     const jobTitle = String(formData.get("jobTitle") || "").trim();
     const country = String(formData.get("country") || "").trim();
     const message = String(formData.get("message") || "").trim();
+
+    if (!isValidInternationalPhoneNumber(mobileNumber)) {
+      setIsSubmittingBrochure(false);
+      toast({ title: "Invalid phone number", description: "Enter a valid phone number for the selected country.", variant: "destructive" });
+      return;
+    }
 
     const { error } = await apiClient.from("contact_messages").insert({
       name: fullName,
@@ -254,18 +262,11 @@ const HeroSection = () => {
                   <Input name="email" type="email" required />
                 </label>
                 <label className="grid gap-1.5 text-sm font-semibold">
-                  Mobile Number (10 digits)*
-                  <Input
+                  Mobile Number*
+                  <InternationalPhoneInput
                     name="mobileNumber"
-                    type="tel"
-                    inputMode="numeric"
-                    pattern="[0-9]{10}"
-                    minLength={10}
-                    maxLength={10}
-                    title="Enter exactly 10 digits."
-                    onChange={(event) => {
-                      event.currentTarget.value = normalizePhoneNumber(event.currentTarget.value);
-                    }}
+                    value={brochurePhone}
+                    onChange={setBrochurePhone}
                     required
                   />
                 </label>

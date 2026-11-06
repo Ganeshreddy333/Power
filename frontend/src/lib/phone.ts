@@ -1,3 +1,5 @@
-export const normalizePhoneNumber = (value: string) => value.replace(/\D/g, "").slice(0, 10);
+import { isValidPhoneNumber } from "libphonenumber-js";
 
-export const isTenDigitPhoneNumber = (value: string) => /^\d{10}$/.test(value);
+/** E.164 validation for values emitted by InternationalPhoneInput. */
+export const isValidInternationalPhoneNumber = (value: string) =>
+  value.startsWith("+") && isValidPhoneNumber(value);

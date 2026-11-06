@@ -4,6 +4,7 @@ import PDFDocument from 'pdfkit';
 import { PrismaService } from '../database/prisma.service';
 import { EmailService, isEmailAddress, type AdminNotificationDetails } from '../email/email.service';
 import { CloudinaryService } from '../storage/cloudinary.service';
+import { parsePhoneNumberFromString } from 'libphonenumber-js';
 
 type Sort = { column: string; ascending?: boolean };
 
@@ -37,6 +38,17 @@ type RawExecutor = {
   $executeRawUnsafe: (...args: any[]) => Promise<any>;
   $queryRawUnsafe: (...args: any[]) => Promise<any>;
 };
+
+function toE164PhoneNumber(value: string, required = false): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    if (required) throw new BadRequestException('A valid international phone number is required');
+    return '';
+  }
+  const phone = parsePhoneNumberFromString(trimmed);
+  if (!phone?.isValid()) throw new BadRequestException('Enter a valid phone number with its country code');
+  return phone.number;
+}
 
 const TABLES: Record<string, TableConfig> = {
   site_data: {
@@ -566,8 +578,8 @@ export class DataService {
     const affiliation = String(payload.affiliation || '').trim();
     const country = String(payload.country || '').trim();
     const requestedPhone = String(payload.phone || '').trim();
-    const phone = requestedPhone === 'Not provided' ? '' : requestedPhone;
-    const whatsapp = String(payload.whatsapp || '').trim();
+    const phone = requestedPhone === 'Not provided' ? '' : toE164PhoneNumber(requestedPhone);
+    const whatsapp = toE164PhoneNumber(String(payload.whatsapp || ''));
     const planKey = String(payload.plan_key || '').trim().toLowerCase();
     const provider = String(payload.payment_provider || 'stripe').toLowerCase();
     const quantity = Number(payload.quantity ?? 1);
@@ -579,9 +591,6 @@ export class DataService {
     }
     if (!affiliation || affiliation.length > 200 || !country || country.length > 100) {
       throw new BadRequestException('Organization and country are required');
-    }
-    if ((phone && !/^\d{10}$/.test(phone)) || (whatsapp && !/^\d{10}$/.test(whatsapp))) {
-      throw new BadRequestException('Phone and WhatsApp numbers must contain exactly 10 digits');
     }
     if (!['stripe', 'paypal', 'razorpay'].includes(provider)) throw new BadRequestException('Unsupported payment provider');
 
@@ -645,10 +654,9 @@ export class DataService {
   async createPublicContactMessage(payload: Record<string, unknown>) {
     const name = String(payload.name || '').trim();
     const email = String(payload.email || '').trim().toLowerCase();
-    const phone = String(payload.phone || '').trim();
+    const phone = toE164PhoneNumber(String(payload.phone || ''));
     const message = String(payload.message || '').trim();
     if (!name || !/^\S+@\S+\.\S+$/.test(email) || !message) throw new BadRequestException('Name, email, and message are required');
-    if (phone && !/^\d{10}$/.test(phone)) throw new BadRequestException('A valid 10-digit phone number is required');
     const subject = String(payload.subject || '').trim().slice(0, 255);
     const isBrochureRequest = subject.toLowerCase() === 'brochure download request';
     const frontendUrl = String(process.env.FRONTEND_URL || 'http://localhost:3000').split(',')[0].trim().replace(/\/$/, '');
@@ -682,16 +690,16 @@ export class DataService {
   async createPublicAbstractSubmission(payload: Record<string, unknown>) {
     const fullName = String(payload.full_name || '').trim();
     const email = String(payload.email || '').trim().toLowerCase();
-    const phone = String(payload.phone || '').trim();
+    const phone = toE164PhoneNumber(String(payload.phone || ''), true);
     const title = String(payload.abstract_title || '').trim();
     if (!fullName || !/^\S+@\S+\.\S+$/.test(email) || !title) throw new BadRequestException('Name, email, and abstract title are required');
-    if (!/^\d{10}$/.test(phone)) throw new BadRequestException('A valid 10-digit phone number is required');
     const allowed = TABLES.abstract_submissions.writable;
     const cleaned = Object.fromEntries(Object.entries(payload).filter(([key]) => allowed.includes(key)));
     return this.persistPublicRecordWithNotification('abstract_submissions', {
       ...cleaned,
       full_name: fullName,
       email,
+      phone,
       abstract_title: title,
       status: 'pending',
     }, (record) => ({

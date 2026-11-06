@@ -16,7 +16,8 @@ import {
   verifyRazorpayPayment,
 } from "@/integrations/api/payments";
 import { type ImportantDateItem, type PricingRow, toLocalDate, useConferenceSettings } from "@/lib/conferenceSettings";
-import { isTenDigitPhoneNumber, normalizePhoneNumber } from "@/lib/phone";
+import { isValidInternationalPhoneNumber } from "@/lib/phone";
+import { InternationalPhoneInput } from "@/components/InternationalPhoneInput";
 import CaptchaVerification from "@/components/CaptchaVerification";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -403,12 +404,12 @@ const PricingSection = () => {
     }
 
     if (
-      (formValues.phone && !isTenDigitPhoneNumber(formValues.phone)) ||
-      (formValues.whatsApp && !isTenDigitPhoneNumber(formValues.whatsApp))
+      (formValues.phone && !isValidInternationalPhoneNumber(formValues.phone)) ||
+      (formValues.whatsApp && !isValidInternationalPhoneNumber(formValues.whatsApp))
     ) {
       toast({
         title: "Invalid phone number",
-        description: "Enter exactly 10 digits for each phone or WhatsApp number provided.",
+        description: "Enter a valid phone or WhatsApp number for the selected country.",
         variant: "destructive",
       });
       return;
@@ -658,17 +659,11 @@ const PricingSection = () => {
                 <Input type="email" placeholder="Email" value={formValues.email} onChange={(event) => updateFormValue("email", event.target.value)} />
               </div>
               <div>
-                <label className="mb-2 block text-sm font-semibold text-foreground">Phone (10 digits)</label>
-                <Input
-                  type="tel"
-                  inputMode="numeric"
-                  pattern="[0-9]{10}"
-                  minLength={10}
-                  maxLength={10}
-                  title="Enter exactly 10 digits."
+                <label className="mb-2 block text-sm font-semibold text-foreground">Phone</label>
+                <InternationalPhoneInput
                   placeholder="Phone"
                   value={formValues.phone}
-                  onChange={(event) => updateFormValue("phone", normalizePhoneNumber(event.target.value))}
+                  onChange={(value) => updateFormValue("phone", value)}
                 />
               </div>
               <div>
@@ -676,17 +671,11 @@ const PricingSection = () => {
                 <Input type="email" placeholder="Email" value={formValues.altEmail} onChange={(event) => updateFormValue("altEmail", event.target.value)} />
               </div>
               <div>
-                <label className="mb-2 block text-sm font-semibold text-foreground">WhatsApp Number (10 digits)</label>
-                <Input
-                  type="tel"
-                  inputMode="numeric"
-                  pattern="[0-9]{10}"
-                  minLength={10}
-                  maxLength={10}
-                  title="Enter exactly 10 digits."
+                <label className="mb-2 block text-sm font-semibold text-foreground">WhatsApp Number</label>
+                <InternationalPhoneInput
                   placeholder="WhatsApp Number"
                   value={formValues.whatsApp}
-                  onChange={(event) => updateFormValue("whatsApp", normalizePhoneNumber(event.target.value))}
+                  onChange={(value) => updateFormValue("whatsApp", value)}
                 />
               </div>
               <div>

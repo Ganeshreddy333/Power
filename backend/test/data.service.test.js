@@ -478,7 +478,7 @@ describe('DataService raw-query behavior', () => {
     await expect(service.createPublicAbstractSubmission({
       full_name: 'Ada Lovelace',
       email: 'ADA@EXAMPLE.TEST',
-      phone: '1234567890',
+      phone: '+1 (415) 555-2671',
       abstract_title: 'Clean Energy Storage',
     })).resolves.toEqual({ id: 'submission-1' });
 
@@ -773,7 +773,7 @@ describe('DataService raw-query behavior', () => {
         id: 'abstract-1',
         full_name: 'Ada Lovelace',
         email: 'ada@example.test',
-        phone: '1234567890',
+        phone: '+14155552671',
         affiliation: 'Analytical Engine Institute',
         country: 'UK',
         session: 'Energy storage',
@@ -893,7 +893,7 @@ describe('DataService raw-query behavior', () => {
       .rejects.toThrow('Verified payment transaction is unavailable or inconsistent');
   });
 
-  it('persists the validated quantity and matching total on registration', async () => {
+  it('persists the normalized phone number, validated quantity, and matching total on registration', async () => {
     const service = new DataService({}, undefined, undefined);
     jest.spyOn(service, 'resolveRegistrationPlan').mockResolvedValue({ amount: 149, label: 'Speaker' });
     jest.spyOn(service, 'persistPublicRecordWithNotification').mockImplementation(async (_table, payload) => payload);
@@ -901,7 +901,7 @@ describe('DataService raw-query behavior', () => {
     const registration = await service.createPublicRegistration({
       full_name: 'Test User',
       email: 'test@example.com',
-      phone: '1234567890',
+      phone: '+1 (415) 555-2671',
       affiliation: 'Example Organization',
       country: 'India',
       plan_key: 'early-speaker',
@@ -911,9 +911,10 @@ describe('DataService raw-query behavior', () => {
 
     expect(registration.quantity).toBe(3);
     expect(registration.amount_usd).toBe(469.35);
+    expect(registration.phone).toBe('+14155552671');
   });
 
-  it('rejects registration phone and WhatsApp numbers that are not exactly 10 digits', async () => {
+  it('validates registration phone and WhatsApp numbers as E.164', async () => {
     const service = new DataService({}, undefined, undefined);
     jest.spyOn(service, 'resolveRegistrationPlan').mockResolvedValue({ amount: 149, label: 'Speaker' });
     jest.spyOn(service, 'insert').mockImplementation(async (_table, payload) => payload);
@@ -922,23 +923,23 @@ describe('DataService raw-query behavior', () => {
       full_name: 'Test User',
       email: 'test@example.com',
       phone: '12345',
-      whatsapp: '1234567890',
+      whatsapp: '+14155552671',
       affiliation: 'Example Organization',
       country: 'India',
       plan_key: 'early-speaker',
       payment_provider: 'razorpay',
-    })).rejects.toThrow('Phone and WhatsApp numbers must contain exactly 10 digits');
+    })).rejects.toThrow('Enter a valid phone number with its country code');
 
     await expect(service.createPublicRegistration({
       full_name: 'Test User',
       email: 'test@example.com',
-      phone: '1234567890',
+      phone: '+14155552671',
       whatsapp: '12345678901',
       affiliation: 'Example Organization',
       country: 'India',
       plan_key: 'early-speaker',
       payment_provider: 'razorpay',
-    })).rejects.toThrow('Phone and WhatsApp numbers must contain exactly 10 digits');
+    })).rejects.toThrow('Enter a valid phone number with its country code');
   });
 
   it('preserves optional registration phone numbers for existing checkout clients', async () => {
@@ -959,7 +960,7 @@ describe('DataService raw-query behavior', () => {
     expect(registration.phone).toBe('Not provided');
   });
 
-  it('rejects contact messages and abstract submissions without a 10-digit phone number', async () => {
+  it('rejects contact messages and abstract submissions without a valid international phone number', async () => {
     const service = new DataService({}, {}, undefined);
     jest.spyOn(service, 'insert').mockResolvedValue({ id: 'submission-1' });
 
@@ -969,14 +970,14 @@ describe('DataService raw-query behavior', () => {
       phone: '12345',
       subject: 'Question',
       message: 'Please contact me.',
-    })).rejects.toThrow('A valid 10-digit phone number is required');
+    })).rejects.toThrow('Enter a valid phone number with its country code');
 
     await expect(service.createPublicAbstractSubmission({
       full_name: 'Ada Lovelace',
       email: 'ada@example.test',
       phone: '12345',
       abstract_title: 'Clean Energy Storage',
-    })).rejects.toThrow('A valid 10-digit phone number is required');
+    })).rejects.toThrow('Enter a valid phone number with its country code');
   });
 
   it('rejects registration without the required organization and country fields', async () => {

@@ -13,7 +13,8 @@ import { apiClient } from "@/integrations/api/client";
 import { useLiveContentRefresh } from "@/hooks/useLiveContentRefresh";
 import { ANNOUNCEMENT_BANNER_CATEGORY } from "@/lib/announcementBanners";
 import type { Tables } from "@/integrations/api/types";
-import { isTenDigitPhoneNumber, normalizePhoneNumber } from "@/lib/phone";
+import { isValidInternationalPhoneNumber } from "@/lib/phone";
+import { InternationalPhoneInput } from "@/components/InternationalPhoneInput";
 
 type InformationBlock = Tables<"information_blocks">;
 
@@ -179,10 +180,10 @@ const Information = () => {
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!isTenDigitPhoneNumber(form.phone)) {
+    if (!isValidInternationalPhoneNumber(form.phone)) {
       toast({
         title: "Invalid phone number",
-        description: "Enter a phone number with exactly 10 digits.",
+        description: "Enter a valid phone number for the selected country.",
         variant: "destructive",
       });
       return;
@@ -346,17 +347,11 @@ const Information = () => {
               <Input required type="email" placeholder="Email" value={form.email} onChange={(event) => updateForm("email", event.target.value)} />
             </div>
             <div className="grid gap-5 md:grid-cols-2">
-              <Input
+              <InternationalPhoneInput
                 required
-                type="tel"
-                inputMode="numeric"
-                pattern="[0-9]{10}"
-                minLength={10}
-                maxLength={10}
-                title="Enter exactly 10 digits."
-                placeholder="Phone Number (10 digits)"
+                placeholder="Phone Number"
                 value={form.phone}
-                onChange={(event) => updateForm("phone", normalizePhoneNumber(event.target.value))}
+                onChange={(value) => updateForm("phone", value)}
               />
               <Input required placeholder="Subject" value={form.subject} onChange={(event) => updateForm("subject", event.target.value)} />
             </div>

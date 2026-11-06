@@ -13,7 +13,8 @@ import { splitLines, useWebsiteContent } from "@/hooks/useWebsiteContent";
 import { apiClient } from "@/integrations/api/client";
 import { Upload, FileText, Download, X } from "lucide-react";
 import CaptchaVerification from "@/components/CaptchaVerification";
-import { isTenDigitPhoneNumber, normalizePhoneNumber } from "@/lib/phone";
+import { isValidInternationalPhoneNumber } from "@/lib/phone";
+import { InternationalPhoneInput } from "@/components/InternationalPhoneInput";
 
 type StoredFileInfo = {
   name: string;
@@ -349,10 +350,10 @@ const AbstractSubmission = () => {
       return;
     }
 
-    if (!isTenDigitPhoneNumber(formData.phone)) {
+    if (!isValidInternationalPhoneNumber(formData.phone)) {
       toast({
         title: "Invalid phone number",
-        description: "Enter a phone number with exactly 10 digits.",
+        description: "Enter a valid phone number for the selected country.",
         variant: "destructive",
       });
       return;
@@ -503,17 +504,11 @@ const AbstractSubmission = () => {
                   <Input type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} required />
                 </div>
                 <div>
-                  <label className="text-sm font-body font-medium text-card-foreground mb-1 block">Phone (10 digits) *</label>
-                  <Input
-                    type="tel"
-                    inputMode="numeric"
-                    pattern="[0-9]{10}"
-                    minLength={10}
-                    maxLength={10}
-                    title="Enter exactly 10 digits."
-                    value={formData.phone}
-                    onChange={(e) => setFormData({ ...formData, phone: normalizePhoneNumber(e.target.value) })}
+                  <label className="text-sm font-body font-medium text-card-foreground mb-1 block">Phone *</label>
+                  <InternationalPhoneInput
                     required
+                    value={formData.phone}
+                    onChange={(value) => setFormData({ ...formData, phone: value })}
                   />
                 </div>
               </div>
